@@ -1,6 +1,6 @@
 # mini_detect: Overview
 
-This Python-based algorithm allows you to detect mini PSCs ("minis") with the help of graphical parameter fine-tuning in Jupyter notebook. This algorithm is particularly good at detection in recordings with heterogenuous taus and amplitudes, and has been tested with low and high Hz mini recordings. 
+This Python-based algorithm allows you to detect mini PSCs ("minis") with the help of graphical parameter fine-tuning in Jupyter notebook. This algorithm is particularly good at detection in recordings with heterogenuous taus and amplitudes, and has been tested with low and high Hz mini recordings. This code is optimized for data obtained using ScanImage software. 
 
 **What you need:** 
 1. Each recording consists of one folder with all of the sweeps (.mat files)
