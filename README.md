@@ -25,6 +25,6 @@ Below are some examples of what you'll see when performing parameter tuning.
 
 # How to Use
 1. Make sure your data is in the correct format and fill out the [metadata.csv file](https://github.com/ellamcho/mini_detect/blob/main/sample_metadata.csv)
-2. Download the [Code folder](https://github.com/ellamcho/mini_detect/tree/main/Code) to your local directory (make sure all files are in the same folder)
-3. Open the [main.ipynb file](https://github.com/ellamcho/mini_detect/blob/main/Code/main.ipynb) and follow the steps written
+2. Download the Code folder to your local directory (make sure all files are in the same folder)
+3. Open the main.ipynb file and follow the steps written
 4. Analyze your data as needed (resutls compatible in Prism, more Python, R, etc.)
