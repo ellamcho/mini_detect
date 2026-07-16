@@ -10,20 +10,23 @@ import json
 import os
 import glob
 from functions import (mat_to_arr, bandpass_filter, decay_window, 
-                       find_peak_near_decay, filter_peaks_by_noise)
+                       find_peak_near_decay, filter_peaks_by_noise,
+                       parse_control_pulse_window, _get_mat_header)
 
 # Set plotly to display in notebook
 pio.renderers.default = 'notebook'
 
 class ParameterTuner:
-    def __init__(self, parent_folder, mode='IPSC', control_pulse_timing='early'):
+    def __init__(self, parent_folder, mode='EPSC', control_pulse_timing='early'):
         """
         Initialize parameter tuner for mini detection optimization
         
         Args:
             parent_folder: Path to folder containing cell subfolders
-            mode: Detection mode ('IPSC' or 'EPSC')
-            control_pulse_timing: Control pulse timing ('early' for 200-250ms or 'late' for 9.8-9.9s)
+            mode: Detection mode ('IPSC' or 'EPSC'), default 'EPSC'
+            control_pulse_timing: Control pulse timing
+                                 ('early'=200-250ms, 'early_WW_2'=100-200ms,
+                                  'early_WW'=200-300ms, 'late'=9.8-9.9s)
         """
         self.parent_folder = parent_folder
         self.mode = mode
@@ -76,6 +79,9 @@ class ParameterTuner:
                 file_name = os.path.basename(mat_file)
                 name_without_ext = os.path.splitext(file_name)[0]
                 mat_arr = mat_to_arr(mat_file, name_without_ext)
+                # Extract control pulse window from file header
+                header = _get_mat_header(mat_file)
+                control_pulse_window = parse_control_pulse_window(header)
                 filtered_mat = bandpass_filter(mat_arr, 1, 3000, fs=10000, order=2)
                 
                 # Use custom parameters
@@ -95,7 +101,8 @@ class ParameterTuner:
                     
                 filtered_peaks = filter_peaks_by_noise(filtered_mat, mono_peaks[0], 
                                                      baseline=None, mode=self.mode, fs=10000,
-                                                     control_pulse_timing=self.control_pulse_timing)
+                                                     control_pulse_timing=self.control_pulse_timing,
+                                                     control_pulse_window=control_pulse_window)
                 
                 n_peaks = len(filtered_peaks[0])
                 results['detections'].append(n_peaks)
@@ -147,6 +154,9 @@ class ParameterTuner:
                 file_name = os.path.basename(mat_file)
                 name_without_ext = os.path.splitext(file_name)[0]
                 mat_arr = mat_to_arr(mat_file, name_without_ext)
+                # Extract control pulse window from file header
+                header = _get_mat_header(mat_file)
+                control_pulse_window = parse_control_pulse_window(header)
                 filtered_mat = bandpass_filter(mat_arr, 1, 3000, fs=10000, order=2)
                 
                 # Use custom parameters
@@ -166,7 +176,8 @@ class ParameterTuner:
                     
                 filtered_peaks = filter_peaks_by_noise(filtered_mat, mono_peaks[0], 
                                                      baseline=None, mode=self.mode, fs=10000,
-                                                     control_pulse_timing=self.control_pulse_timing)
+                                                     control_pulse_timing=self.control_pulse_timing,
+                                                     control_pulse_window=control_pulse_window)
                 
                 n_peaks = len(filtered_peaks[0])
                 results['detections'].append(n_peaks)
@@ -212,6 +223,9 @@ class ParameterTuner:
                 file_name = os.path.basename(first_file)
                 name_without_ext = os.path.splitext(file_name)[0]
                 mat_arr = mat_to_arr(first_file, name_without_ext)
+                # Extract control pulse window from file header
+                header = _get_mat_header(first_file)
+                cpw = parse_control_pulse_window(header)
                 filtered_mat = bandpass_filter(mat_arr, 1, 3000, fs=10000, order=2)
                 
                 # Create time axis (assuming 10kHz sampling)
@@ -245,24 +259,12 @@ class ParameterTuner:
                         hovertemplate='Peak Time: %{x:.1f}ms<br>Amplitude: %{y:.1f}pA<extra></extra>'
                     ))
                 
-                # Add control pulse region based on timing
-                if self.control_pulse_timing == 'early':
+                # Add shaded control pulse region from header-parsed window
+                if cpw is not None:
+                    x0_ms = cpw[0] / 10000 * 1000
+                    x1_ms = cpw[1] / 10000 * 1000
                     fig.add_vrect(
-                        x0=200, x1=250,  # Convert sample indices to ms
-                        fillcolor="gray", opacity=0.3,
-                        annotation_text="Control pulse (excluded)",
-                        annotation_position="top left"
-                    )
-                elif self.control_pulse_timing == 'early_WW':
-                    fig.add_vrect(
-                        x0=200, x1=300,  # Convert sample indices to ms
-                        fillcolor="gray", opacity=0.3,
-                        annotation_text="Control pulse (excluded)",
-                        annotation_position="top left"
-                    )
-                elif self.control_pulse_timing == 'late':
-                    fig.add_vrect(
-                        x0=9800, x1=9900,  # Convert sample indices to ms
+                        x0=x0_ms, x1=x1_ms,
                         fillcolor="gray", opacity=0.3,
                         annotation_text="Control pulse (excluded)",
                         annotation_position="top left"
@@ -334,6 +336,9 @@ class ParameterTuner:
                     file_name = os.path.basename(file_path)
                     name_without_ext = os.path.splitext(file_name)[0]
                     mat_arr = mat_to_arr(file_path, name_without_ext)
+                    # Extract control pulse window from file header
+                    header = _get_mat_header(file_path)
+                    cpw = parse_control_pulse_window(header)
                     filtered_mat = bandpass_filter(mat_arr, 1, 3000, fs=10000, order=2)
                     
                     # Create time axis
@@ -376,23 +381,12 @@ class ParameterTuner:
                             row=row, col=col
                         )
                     
-                    # Add control pulse region
-                    if self.control_pulse_timing == 'early':
+                    # Add shaded control pulse region from header-parsed window
+                    if cpw is not None:
+                        x0_ms = cpw[0] / 10000 * 1000
+                        x1_ms = cpw[1] / 10000 * 1000
                         fig.add_vrect(
-                            x0=200, x1=250,
-                            fillcolor="gray", opacity=0.2,
-                            row=row, col=col
-                        )
-
-                    elif self.control_pulse_timing == 'early_WW':
-                        fig.add_vrect(
-                            x0=200, x1=300,
-                            fillcolor="gray", opacity=0.2,
-                            row=row, col=col
-                        )
-                    elif self.control_pulse_timing == 'late':
-                        fig.add_vrect(
-                            x0=9800, x1=9900,
+                            x0=x0_ms, x1=x1_ms,
                             fillcolor="gray", opacity=0.2,
                             row=row, col=col
                         )
@@ -494,19 +488,79 @@ class ParameterTuner:
         
         return all_results
     
-    def save_parameters(self, cell_name, window_size, sample_step, interval, control_pulse_timing=None):
-        """Save optimal parameters for a cell"""
+    def save_parameters(self, cell_name, window_size, sample_step, interval, control_pulse_timing=None, mode=None):
+        """Save optimal parameters for a cell.
+
+        Supports multiple parameter sets per cell (e.g., EPSC and IPSC).
+        If called multiple times for the same `cell_name`, parameters are appended.
+        """
         # Use provided control_pulse_timing or fall back to instance default
         pulse_timing = control_pulse_timing if control_pulse_timing is not None else self.control_pulse_timing
         
-        self.parameters[cell_name] = {
+        # Determine mode for this parameter set:
+        # 1) If explicit `mode` provided, validate and use it
+        # 2) Else, if this cell already has saved params, inherit its last saved mode
+        # 3) Else, fall back to the tuner's current mode; if unset, default to 'EPSC'
+        def _normalize_mode(m):
+            try:
+                mm = str(m).upper()
+                return mm if mm in {"IPSC", "EPSC"} else None
+            except Exception:
+                return None
+
+        existing_for_cell = self.parameters.get(cell_name)
+
+        explicit_mode = _normalize_mode(mode) if mode is not None else None
+        if explicit_mode:
+            cell_mode = explicit_mode
+        else:
+            inherited_mode = None
+            if isinstance(existing_for_cell, list) and existing_for_cell:
+                inherited_mode = _normalize_mode(existing_for_cell[-1].get('mode'))
+            elif isinstance(existing_for_cell, dict):
+                inherited_mode = _normalize_mode(existing_for_cell.get('mode'))
+
+            tuner_mode = _normalize_mode(self.mode)
+            cell_mode = inherited_mode or tuner_mode or 'EPSC'
+            if mode is None and inherited_mode is None:
+                # Gentle nudge to encourage explicit per-cell modes when using a global tuner mode
+                print(f"Note: No explicit mode provided for {cell_name}. Using '{cell_mode}'.")
+        
+        new_params = {
             'window_size': window_size,
             'sample_step': sample_step,
             'interval': interval,
-            'mode': self.mode,
+            'mode': cell_mode,
             'control_pulse_timing': pulse_timing
         }
-        print(f"Saved parameters for {cell_name}: ws={window_size}, ss={sample_step}, int={interval}, pulse_timing={pulse_timing}")
+
+        existing = self.parameters.get(cell_name)
+        def _same(a, b):
+            keys = ('window_size','sample_step','interval','control_pulse_timing','mode')
+            return all(a.get(k) == b.get(k) for k in keys)
+
+        if existing is None:
+            # First parameter set for this cell
+            self.parameters[cell_name] = [new_params]
+            set_index = 1
+        elif isinstance(existing, list):
+            # Append to existing list of parameter sets if not duplicate
+            if not any(_same(p, new_params) for p in existing):
+                existing.append(new_params)
+            set_index = len(existing)
+        elif isinstance(existing, dict):
+            # Backward compatibility: convert single dict to list and append if not duplicate
+            lst = [existing]
+            if not _same(existing, new_params):
+                lst.append(new_params)
+            self.parameters[cell_name] = lst
+            set_index = len(self.parameters[cell_name])
+        else:
+            # Unexpected type; overwrite with list containing the new params
+            self.parameters[cell_name] = [new_params]
+            set_index = 1
+
+        print(f"Saved parameter set #{set_index} for {cell_name}: ws={window_size}, ss={sample_step}, int={interval}, mode={cell_mode}, pulse_timing={pulse_timing}")
     
     def export_parameters(self, filename, output_dir=None):
         """
@@ -552,48 +606,57 @@ class ParameterTuner:
                 print(f"No parameters saved for {cell_name}, skipping")
                 continue
             
-            params = self.parameters[cell_name]
-            print(f"\nProcessing {cell_name} with optimized parameters...")
-            
-            # Run detection with saved parameters
+            param_sets = self.parameters[cell_name]
+            # Backward compatibility: wrap single dict into a list
+            if isinstance(param_sets, dict):
+                param_sets = [param_sets]
+            elif not isinstance(param_sets, list):
+                print(f"Warning: Unexpected parameter format for {cell_name}. Skipping.")
+                continue
+
             mat_files = glob.glob(os.path.join(cell_folder, "*.mat"))
-            cell_results = []
-            
-            for mat_file in mat_files:
-                try:
-                    file_name = os.path.basename(mat_file)
-                    name_without_ext = os.path.splitext(file_name)[0]
-                    mat_arr = mat_to_arr(mat_file, name_without_ext)
-                    filtered_mat = bandpass_filter(mat_arr, 1, 3000, fs=10000, order=2)
-                    
-                    mono_indices = decay_window(filtered_mat, 
-                                              params['window_size'], 
-                                              params['sample_step'], 
-                                              mode=self.mode)
-                    if mono_indices:
-                        mono_peaks = find_peak_near_decay(filtered_mat, mono_indices, 
-                                                        interval=params['interval'], 
-                                                        mode=self.mode)
-                        if mono_peaks[0]:
-                            # Use the stored control_pulse_timing for this specific cell, fall back to tuner default
-                            cell_pulse_timing = params.get('control_pulse_timing', self.control_pulse_timing)
-                            filtered_peaks = filter_peaks_by_noise(filtered_mat, mono_peaks[0], 
-                                                                 baseline=None, mode=self.mode, fs=10000,
-                                                                 control_pulse_timing=cell_pulse_timing)
-                            cell_results.append(filtered_peaks)
+
+            for idx, params in enumerate(param_sets, start=1):
+                print(f"\nProcessing {cell_name} (set #{idx}) with optimized parameters...")
+                # Use saved per-cell mode if provided, otherwise default to 'EPSC'
+                cell_mode = params.get('mode', 'EPSC')
+
+                cell_results = []
+                for mat_file in mat_files:
+                    try:
+                        file_name = os.path.basename(mat_file)
+                        name_without_ext = os.path.splitext(file_name)[0]
+                        mat_arr = mat_to_arr(mat_file, name_without_ext)
+                        filtered_mat = bandpass_filter(mat_arr, 1, 3000, fs=10000, order=2)
+
+                        mono_indices = decay_window(filtered_mat,
+                                                    params['window_size'],
+                                                    params['sample_step'],
+                                                    mode=cell_mode)
+                        if mono_indices:
+                            mono_peaks = find_peak_near_decay(filtered_mat, mono_indices,
+                                                              interval=params['interval'],
+                                                              mode=cell_mode)
+                            if mono_peaks[0]:
+                                # Use the stored control_pulse_timing for this specific cell, fall back to tuner default
+                                cell_pulse_timing = params.get('control_pulse_timing', self.control_pulse_timing)
+                                filtered_peaks = filter_peaks_by_noise(filtered_mat, mono_peaks[0],
+                                                                       baseline=None, mode=cell_mode, fs=10000,
+                                                                       control_pulse_timing=cell_pulse_timing)
+                                cell_results.append(filtered_peaks)
+                            else:
+                                cell_results.append(([], []))
                         else:
                             cell_results.append(([], []))
-                    else:
+
+                    except Exception as e:
+                        print(f"Error processing {mat_file}: {e}")
                         cell_results.append(([], []))
-                        
-                except Exception as e:
-                    print(f"Error processing {mat_file}: {e}")
-                    cell_results.append(([], []))
-            
-            all_results.append((mat_files, cell_results))
-            
-            # Calculate summary stats
-            total_peaks = sum(len(result[0]) for result in cell_results)
-            print(f"Detected {total_peaks} total peaks in {len(mat_files)} files")
+
+                all_results.append((mat_files, cell_results))
+
+                # Calculate summary stats per parameter set
+                total_peaks = sum(len(result[0]) for result in cell_results)
+                print(f"Mode={cell_mode} | Detected {total_peaks} total peaks in {len(mat_files)} files")
         
         return all_results
