@@ -12,17 +12,6 @@ This Python-based algorithm allows you to detect mini PSCs ("minis") with the he
 3. The mini Hz per cell recording
 4. csvs separated by condition and also combined with the information from 2 and 3
 
-Below are some examples of what you'll see when performing parameter tuning.
- 
-**Example: Poor Detection with "Reasonable" Parameters**
-![Poor Detection with "Reasonable" Parameters](https://github.com/ellamcho/mini_detect/blob/main/Images/poor_detection.png)
-
-**The same trace with refined parameters:**
-![Better Detection with Refined Parameters](https://github.com/ellamcho/mini_detect/blob/main/Images/better_detection.png)
-
-**Live summary table comparing parameters:**
-![Summary Table for Ease of Comparison](https://github.com/ellamcho/mini_detect/blob/main/Images/summary_table.png)
-
 # How to Use
 1. Make sure your data is in the correct format and fill out the [metadata.csv file](https://github.com/ellamcho/mini_detect/blob/main/sample_metadata.csv)
 2. Download the Code folder to your local directory (make sure all files are in the same folder)
