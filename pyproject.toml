@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mini-detect"
+version = "0.1.0"
+description = "Desktop app for tuning, detecting and exporting miniature synaptic currents (mEPSCs / mIPSCs) from ScanImage .mat sweeps"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "PySide6-Essentials>=6.5",
+    "pyqtgraph>=0.13.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.gui-scripts]
+mini-detect = "mini_detect.gui.app:main"
+
+[project.urls]
+Repository = "https://github.com/ellamcho/mini_detect"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mini_detect"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/mini_detect", "tests", "README.md", "metadata_template.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

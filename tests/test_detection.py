@@ -1,0 +1,132 @@
+"""Checks that the fast detection gives exactly what the original notebook's
+sample-by-sample scan gave, and that a folder of sweeps runs end to end."""
+import numpy as np
+import pytest
+import scipy.io as sio
+
+from mini_detect import analysis
+from mini_detect import detection as det
+
+FS = 10000
+HEADER = (
+    "state.phys.internal.pulseString_RCCheck='amplitude=-5;duration=1000;offset=0;"
+    "numPulses=1;isi=0;pulseWidth=50;delay=200;ramp=0;patternRepeats=0;patternISI=0;'\r"
+    "state.phys.settings.inputRate=10000\r"
+)
+
+
+def synthetic_trace(seed, n=60000, sign=-1.0):
+    """Noise plus a handful of fast-rise / exponential-decay events."""
+    rng = np.random.default_rng(seed)
+    trace = rng.normal(0, 0.3, n)
+    t = np.arange(400)
+    for start in rng.choice(np.arange(4000, n - 1000), size=25, replace=False):
+        amplitude = rng.uniform(12, 40)
+        trace[start:start + 400] += sign * amplitude * np.exp(-t / 60.0)
+    trace[2000:2500] -= 40.0  # RC-check pulse
+    return trace
+
+
+def reference_decay_windows(trace, window_size, sample_step, mode):
+    """The notebook's original loop, kept here as the reference."""
+    inward = det.is_inward(mode)
+    found = []
+    i = 0
+    while i <= len(trace) - window_size:
+        sampled = trace[i:i + window_size][::sample_step]
+        if len(sampled) > 1:
+            steps = np.diff(sampled)
+            if np.all(steps > 0) if inward else np.all(steps < 0):
+                found.append(i)
+                i += window_size
+                continue
+        i += 1
+    return found
+
+
+@pytest.mark.parametrize("mode", det.MODES)
+@pytest.mark.parametrize("params", [(60, 15, 5), (100, 25, 15), (130, 35, 20), (61, 7, 3)])
+def test_decay_windows_match_reference(mode, params):
+    sign = -1.0 if det.is_inward(mode) else 1.0
+    trace = synthetic_trace(seed=params[0], sign=sign)
+    window_size, sample_step, _ = params
+    expected = reference_decay_windows(trace, window_size, sample_step, mode)
+    assert expected, "the synthetic trace should contain detectable decays"
+    assert det.decay_windows(trace, window_size, sample_step, mode) == expected
+
+
+def test_decay_windows_edge_cases():
+    trace = np.arange(50.0)
+    assert det.decay_windows(trace, 100, 10, "EPSC") == []  # window longer than trace
+    assert det.decay_windows(trace, 10, 10, "EPSC") == []   # only one sampled point
+    assert det.decay_windows(trace, 20, 5, "EPSC") == [0, 20]
+    assert det.decay_windows(trace, 20, 5, "IPSC") == []
+
+
+def write_sweep(path, trace):
+    wave = {
+        "data": trace.reshape(1, -1),
+        "UserData": {"info": "", "name": path.stem, "headerString": np.array([HEADER])},
+    }
+    sio.savemat(str(path), {path.stem: wave})
+
+
+@pytest.fixture
+def data_folder(tmp_path):
+    for cell, seeds in (("cellA", (1, 2)), ("cellB", (3,))):
+        (tmp_path / cell).mkdir()
+        for i, seed in enumerate(seeds):
+            write_sweep(tmp_path / cell / f"AD0_{i + 1}.mat", synthetic_trace(seed))
+    (tmp_path / "notes").mkdir()  # a folder without sweeps is ignored
+    return tmp_path
+
+
+def test_load_and_detect(data_folder):
+    sweep = det.load_sweep(str(data_folder / "cellA" / "AD0_1.mat"))
+    assert sweep.fs == FS
+    assert sweep.control_window == (2000, 2500)
+    values, indices = det.detect_events(sweep, 60, 15, 5, "EPSC")
+    assert len(values) >= 15  # 25 events were added to the trace
+    assert all(v < -det.MIN_AMPLITUDE_PA for v in values)
+    assert not any(2000 <= i <= 2500 for i in indices)
+    assert det.detect_events(sweep, 60, 15, 5, "IPSC")[0] == []
+
+
+def test_run_and_export(data_folder, tmp_path):
+    parameters = {
+        "cellA": [analysis.make_param_set(60, 15, 5, "EPSC"),
+                  analysis.make_param_set(60, 15, 5, "IPSC")],
+        "cellB": [analysis.make_param_set(100, 25, 15, "EPSC")],
+    }
+    results = analysis.run_detection(str(data_folder), parameters, log=lambda _: None)
+    assert [(r.cell, r.mode, len(r.sweeps)) for r in results] == [
+        ("cellA", "EPSC", 2), ("cellA", "IPSC", 2), ("cellB", "EPSC", 1)]
+    cell_a = results[0]
+    assert cell_a.frequency_hz == pytest.approx(cell_a.n_events / 12.0)
+    assert len(cell_a.amplitudes) == cell_a.n_events
+
+    out = tmp_path / "out"
+    written = analysis.export_results(
+        results, str(out), "test", conditions={"cellA": "control"}, log=lambda _: None)
+    names = {p.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] for p in written}
+    assert {"Amplitude_combined_test.csv", "Frequency_combined_test.csv",
+            "Rs_Rm_Cm_all_cells_test.csv", "control_IPI_by_cell_test.csv",
+            "Unknown_ampls_by_cell_test.csv"} <= names
+
+    import pandas as pd
+    combined = pd.read_csv(out / "Amplitude_combined_test.csv")
+    assert list(combined["Condition"]) == ["control", "control", "Unknown"]
+    per_event = pd.read_csv(out / "control_ampls_by_cell_test.csv")
+    assert list(per_event.columns) == ["Amplitude_Number", "cellA (EPSC)", "cellA (IPSC)"]
+
+
+def test_parameter_files_round_trip(tmp_path):
+    old_style = {"cell1": {"window_size": 60, "sample_step": 15, "interval": 5},
+                 "cell2": [{"window_size": 130, "sample_step": 35, "interval": 20,
+                            "mode": "ipsc_high_cl", "control_pulse_timing": "late"}]}
+    normal = analysis.normalize_parameters(old_style)
+    assert normal["cell1"][0]["mode"] == "EPSC"
+    assert normal["cell2"][0]["mode"] == "IPSC_high_Cl"
+    path = tmp_path / "p.json"
+    analysis.save_parameters(str(path), normal)
+    assert analysis.load_parameters(str(path)) == normal
