@@ -163,16 +163,29 @@ def _try_load(path):
         return None, exc
 
 
-def run_detection(parent_folder, parameters, progress=None, cancelled=None, log=print):
-    """Detect events in every cell folder that has saved parameters.
+def run_detection(folders, parameters, progress=None, cancelled=None, log=print):
+    """Detect events in every cell that has saved parameters, in one session
+    folder or a list of them. See detect_cells for the other arguments."""
+    if isinstance(folders, (str, os.PathLike)):
+        folders = [folders]
+    cells, skipped = det.merge_sessions(
+        [(str(folder), det.scan_cells(str(folder))) for folder in folders])
+    for folder, names in skipped.items():
+        log(f"Left out of {os.path.basename(folder)} (same name as a cell in another "
+            f"folder): {', '.join(names)}")
+    return detect_cells(cells, parameters, progress, cancelled, log)
+
+
+def detect_cells(cells, parameters, progress=None, cancelled=None, log=print):
+    """Detect events in each of `cells` (detection.Cell) that has saved parameters.
 
     progress(done, total, cell_name) is called after each sweep; cancelled() is
     polled between sweeps. Returns a list of CellResult, or None if cancelled.
     """
     jobs = [
-        (name, det.list_sweeps(folder))
-        for name, folder, _ in det.scan_cells(parent_folder)
-        if parameters.get(name)
+        (cell.name, det.list_sweeps(cell.path))
+        for cell in cells
+        if parameters.get(cell.name)
     ]
     total = sum(len(files) for _, files in jobs)
     done = 0

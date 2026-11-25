@@ -1,5 +1,7 @@
 """Checks that the fast detection gives exactly what the original notebook's
 sample-by-sample scan gave, and that a folder of sweeps runs end to end."""
+import os
+
 import numpy as np
 import pytest
 from conftest import FS, synthetic_trace
@@ -92,3 +94,27 @@ def test_parameter_files_round_trip(tmp_path):
     path = tmp_path / "p.json"
     analysis.save_parameters(str(path), normal)
     assert analysis.load_parameters(str(path)) == normal
+
+
+def test_several_session_folders(session_folders):
+    day1 = os.path.normpath(str(session_folders / "day1"))
+    day2 = os.path.normpath(str(session_folders / "day2"))
+
+    # A folder of session folders opens as each of them; a session folder as itself.
+    sessions = det.find_sessions(str(session_folders))
+    assert [folder for folder, _ in sessions] == [day1, day2]
+    assert [folder for folder, _ in det.find_sessions(day2)] == [day2]
+    assert det.find_sessions(str(session_folders / "figures")) == []
+
+    # A cell name is used once: the first folder keeps it.
+    cells, skipped = det.merge_sessions(sessions)
+    assert [(c.name, c.folder) for c in cells] == [("cellC", day1), ("cellD", day2)]
+    assert skipped == {day2: ["cellC"]}
+
+    parameters = {name: [analysis.make_param_set(60, 15, 5, "EPSC")]
+                  for name in ("cellC", "cellD")}
+    log = []
+    results = analysis.run_detection([day1, day2], parameters, log=log.append)
+    assert [r.cell for r in results] == ["cellC", "cellD"]
+    assert os.path.dirname(os.path.dirname(results[0].sweeps[0].path)) == day1
+    assert any("Left out of day2" in line and "cellC" in line for line in log)

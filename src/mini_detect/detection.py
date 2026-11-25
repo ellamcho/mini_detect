@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import scipy.io as sio
@@ -67,22 +69,79 @@ def list_sweeps(cell_folder: str) -> list[str]:
     return [os.path.join(cell_folder, n) for n in sorted(names, key=natural_key)]
 
 
-def scan_cells(parent_folder: str) -> list[tuple]:
-    """(name, path, number of sweeps) for every sub-folder holding .mat files."""
-    cells = []
-    for name in sorted(os.listdir(parent_folder), key=natural_key):
-        path = os.path.join(parent_folder, name)
-        if name.startswith(".") or not os.path.isdir(path):
-            continue
-        n_sweeps = len(list_sweeps(path))
-        if n_sweeps:
-            cells.append((name, path, n_sweeps))
-    return cells
+class Cell(NamedTuple):
+    name: str      # the cell's folder name; also its key in parameter files
+    path: str
+    n_sweeps: int
+    folder: str    # the session folder the cell is in
 
 
-def list_cells(parent_folder: str) -> list[str]:
-    """Sub-folders of `parent_folder` that contain at least one .mat file."""
-    return [path for _, path, _ in scan_cells(parent_folder)]
+def _subfolders(folder: str) -> list[tuple]:
+    with os.scandir(folder) as entries:
+        found = [(e.name, e.path) for e in entries
+                 if not e.name.startswith(".") and e.is_dir()]
+    return sorted(found, key=lambda item: natural_key(item[0]))
+
+
+def _count_sweeps(folder: str) -> int:
+    try:
+        with os.scandir(folder) as entries:
+            return sum(1 for e in entries
+                       if e.name.lower().endswith(".mat") and not e.name.startswith("."))
+    except OSError:
+        return 0
+
+
+def scan_cells(session_folder: str) -> list[Cell]:
+    """Every sub-folder of a session folder that holds .mat files."""
+    folders = _subfolders(session_folder)
+    # Listing hundreds of folders on a network drive is slow one at a time.
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        counts = list(pool.map(_count_sweeps, [path for _, path in folders]))
+    return [Cell(name, path, n, session_folder)
+            for (name, path), n in zip(folders, counts) if n]
+
+
+def list_cells(session_folder: str) -> list[str]:
+    """Sub-folders of `session_folder` that contain at least one .mat file."""
+    return [cell.path for cell in scan_cells(session_folder)]
+
+
+def find_sessions(folder: str) -> list[tuple]:
+    """Session folders at or just below `folder`, as [(session_folder, cells)].
+
+    If `folder` holds cell folders it is itself the session. Otherwise each of
+    its sub-folders that holds cell folders is one, so a folder of sessions can
+    be opened in one go.
+    """
+    folder = os.path.normpath(os.path.abspath(folder))
+    cells = scan_cells(folder)
+    if cells:
+        return [(folder, cells)]
+    found = []
+    for _, path in _subfolders(folder):
+        cells = scan_cells(path)
+        if cells:
+            found.append((path, cells))
+    return found
+
+
+def merge_sessions(sessions) -> tuple:
+    """Flatten [(session_folder, cells)] into one list of cells.
+
+    Parameters, metadata and exports all identify a cell by its folder name, so
+    a name can be used only once: the first session that has it keeps it.
+    Returns (cells, skipped) where skipped is {session_folder: [names left out]}.
+    """
+    cells, seen, skipped = [], set(), {}
+    for folder, session_cells in sessions:
+        for cell in session_cells:
+            if cell.name in seen:
+                skipped.setdefault(folder, []).append(cell.name)
+            else:
+                seen.add(cell.name)
+                cells.append(cell)
+    return cells, skipped
 
 
 # ---------------------------------------------------------------- file loading

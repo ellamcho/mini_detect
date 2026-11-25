@@ -5,6 +5,7 @@ Runs without a display by default. Set QT_QPA_PLATFORM to the platform's own
 plugin (for example `windows`) to exercise real windows, and
 MINI_DETECT_SCREENSHOTS to a folder to keep pictures of what was drawn.
 """
+import json
 import os
 import time
 
@@ -13,7 +14,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QSettings  # noqa: E402
+from PySide6.QtCore import QEventLoop, QMimeData, QPointF, QSettings, Qt, QUrl  # noqa: E402
+from PySide6.QtGui import QDropEvent  # noqa: E402
 
 from mini_detect.gui import state  # noqa: E402
 from mini_detect.gui.app import MainWindow, create_app  # noqa: E402
@@ -53,7 +55,7 @@ def snapshot(app, window, name):
 def test_whole_workflow(app, data_folder, tmp_path):
     window = MainWindow()
     window.show()
-    window.open_folder(str(data_folder))
+    window.add_folders([str(data_folder)])
     wait_for(app, lambda: len(window.session.cells) == 2)
     assert [c[0] for c in window.session.cells] == ["cellA", "cellB"]
 
@@ -79,7 +81,7 @@ def test_whole_workflow(app, data_folder, tmp_path):
     wait_for(app, lambda: tune._cell[0] == "cellB" and len(tune._shown) == 1)
     tune.save_next.click()
     wait_for(app, lambda: window.session.n_tuned() == 2)
-    assert window.tree.topLevelItem(0).text(2) == "EPSC 60/15/5"
+    assert window.tree.topLevelItem(0).child(0).text(2) == "EPSC 60/15/5"
 
     # Detect and export.
     run = window.run
@@ -109,10 +111,57 @@ def test_whole_workflow(app, data_folder, tmp_path):
                  "test_optimized_parameters.json", "test_optimized_results.pkl"):
         assert (out / name).is_file(), name
 
-    # Parameters come back when the same folder is opened again.
+    # The folder and its parameters come back when the app is started again.
     window.close()
     reopened = MainWindow()
-    reopened.open_folder(str(data_folder))
     wait_for(app, lambda: len(reopened.session.cells) == 2)
     assert reopened.session.n_tuned() == 2
     reopened.close()
+
+
+def test_several_session_folders(app, session_folders, tmp_path):
+    day2 = os.path.normpath(str(session_folders / "day2"))
+    window = MainWindow()
+    window.show()
+
+    # Adding the folder that holds the session folders opens both of them.
+    window.add_folders([str(session_folders)])
+    wait_for(app, lambda: len(window.session.cells) == 2)
+    assert [os.path.basename(f) for f in window.session.folders] == ["day1", "day2"]
+    assert [c.name for c in window.session.cells] == ["cellC", "cellD"]
+    assert window.tree.topLevelItemCount() == 2
+    assert "1 left out" in window.tree.topLevelItem(1).text(0)  # the second cellC
+
+    # Tune every cell across both folders, then save them to one file.
+    tune = window.tune
+    wait_for(app, lambda: tune.current_cell() is not None and len(tune._shown) == 1)
+    assert tune.current_cell().name == "cellC"
+    tune.save_next.click()
+    wait_for(app, lambda: tune.current_cell().name == "cellD" and len(tune._shown) == 1)
+    tune.save_next.click()
+    wait_for(app, lambda: window.session.n_tuned() == 2)
+    saved = tmp_path / "all_sessions.json"
+    window.save_parameters_to(str(saved))
+    assert sorted(json.loads(saved.read_text())) == ["cellC", "cellD"]
+    snapshot(app, window, "two_folders")
+
+    # Detection covers the cells of every open folder.
+    run = window.run
+    run.run.click()
+    wait_for(app, lambda: run.results is not None and run._job is None)
+    assert [r.cell for r in run.results] == ["cellC", "cellD"]
+
+    # Removing a folder keeps its parameters; adding it back restores its cells.
+    window.tree.setCurrentItem(window.tree.topLevelItem(1))
+    assert window.remove_btn.isEnabled()
+    window.remove_btn.click()
+    wait_for(app, lambda: len(window.session.cells) == 1)
+    assert "cellD" in window.session.parameters
+    drop = QMimeData()
+    drop.setUrls([QUrl.fromLocalFile(day2)])  # as if dragged onto the window
+    window.dropEvent(QDropEvent(QPointF(20, 20), Qt.CopyAction, drop,
+                                Qt.LeftButton, Qt.NoModifier))
+    wait_for(app, lambda: len(window.session.cells) == 2)
+    assert window.session.n_tuned() == 2
+    window.close()
+

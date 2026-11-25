@@ -39,3 +39,15 @@ def data_folder(tmp_path):
             write_sweep(tmp_path / cell / f"AD0_{i + 1}.mat", synthetic_trace(seed))
     (tmp_path / "notes").mkdir()  # a folder without sweeps is ignored
     return tmp_path
+
+
+@pytest.fixture
+def session_folders(tmp_path):
+    """Two session folders side by side. Both have a cell called cellC."""
+    parent = tmp_path / "experiment"
+    for session, cells in (("day1", {"cellC": 4}), ("day2", {"cellC": 5, "cellD": 6})):
+        for cell, seed in cells.items():
+            (parent / session / cell).mkdir(parents=True)
+            write_sweep(parent / session / cell / "AD0_1.mat", synthetic_trace(seed))
+    (parent / "figures").mkdir()  # not a session folder: ignored
+    return parent
