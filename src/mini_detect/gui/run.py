@@ -187,12 +187,12 @@ class RunPanel(QWidget):
 
     def _choose_output(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Choose the output folder", self.output.text() or self.session.data_folder)
+            self, "Choose the output folder", self.output.text() or self.session.start_dir)
         if folder:
             self.output.setText(folder)
 
     def _choose_metadata(self):
-        start = os.path.dirname(self.metadata_path.text()) or self.session.data_folder
+        start = os.path.dirname(self.metadata_path.text()) or self.session.start_dir
         path, _ = QFileDialog.getOpenFileName(
             self, "Choose the metadata file", start, "CSV files (*.csv);;All files (*)")
         if path:
@@ -245,7 +245,7 @@ class RunPanel(QWidget):
         if conditions is None:
             self.match.setText("Pick two different columns.")
             return
-        names = [name for name, _, _ in self.session.cells]
+        names = [cell.name for cell in self.session.cells]
         matched = sum(1 for name in names if name in conditions)
         groups = len(set(conditions.values()))
         self.match.setText(
@@ -278,7 +278,7 @@ class RunPanel(QWidget):
         if running:
             return
         if not self.session.cells:
-            self.note.setText("Choose a data folder first.")
+            self.note.setText("Add a session folder first.")
         elif tuned == 0:
             self.note.setText("No cell has saved parameters yet. Save some on the Tune tab.")
         elif self.results is None:
@@ -294,14 +294,15 @@ class RunPanel(QWidget):
             self.note.setText("Detection finished. Ready to export.")
 
     def _run(self):
-        folder = self.session.data_folder
+        cells = list(self.session.cells)
+        n_folders = len({cell.folder for cell in cells})
         # Snapshot, so edits made while the job runs cannot change it mid-way.
         parameters = {cell: [dict(p) for p in sets]
                       for cell, sets in self.session.parameters.items()}
 
         def work(job):
-            return analysis.run_detection(
-                folder, parameters,
+            return analysis.detect_cells(
+                cells, parameters,
                 progress=job.progress.emit, cancelled=job.cancelled, log=job.message.emit)
 
         self._job = Job(self, work)
@@ -313,7 +314,9 @@ class RunPanel(QWidget):
         self._run_parameters = parameters
         self.progress.setRange(0, 0)
         self.note.setText("Running detection…")
-        self.log.appendPlainText(f"Running detection in {folder}")
+        self.log.appendPlainText(
+            f"Running detection on {len(cells)} cells in {n_folders} session folder"
+            + ("" if n_folders == 1 else "s"))
         self._refresh_buttons()
         self._job.start()
 

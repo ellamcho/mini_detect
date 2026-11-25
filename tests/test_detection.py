@@ -1,31 +1,13 @@
 """Checks that the fast detection gives exactly what the original notebook's
 sample-by-sample scan gave, and that a folder of sweeps runs end to end."""
+import os
+
 import numpy as np
 import pytest
-import scipy.io as sio
+from conftest import FS, synthetic_trace
 
 from mini_detect import analysis
 from mini_detect import detection as det
-
-FS = 10000
-HEADER = (
-    "state.phys.internal.pulseString_RCCheck='amplitude=-5;duration=1000;offset=0;"
-    "numPulses=1;isi=0;pulseWidth=50;delay=200;ramp=0;patternRepeats=0;patternISI=0;'\r"
-    "state.phys.settings.inputRate=10000\r"
-)
-
-
-def synthetic_trace(seed, n=60000, sign=-1.0):
-    """Noise plus a handful of fast-rise / exponential-decay events."""
-    rng = np.random.default_rng(seed)
-    trace = rng.normal(0, 0.3, n)
-    t = np.arange(400)
-    for start in rng.choice(np.arange(4000, n - 1000), size=25, replace=False):
-        amplitude = rng.uniform(12, 40)
-        trace[start:start + 400] += sign * amplitude * np.exp(-t / 60.0)
-    trace[2000:2500] -= 40.0  # RC-check pulse
-    return trace
-
 
 def reference_decay_windows(trace, window_size, sample_step, mode):
     """The notebook's original loop, kept here as the reference."""
@@ -61,24 +43,6 @@ def test_decay_windows_edge_cases():
     assert det.decay_windows(trace, 10, 10, "EPSC") == []   # only one sampled point
     assert det.decay_windows(trace, 20, 5, "EPSC") == [0, 20]
     assert det.decay_windows(trace, 20, 5, "IPSC") == []
-
-
-def write_sweep(path, trace):
-    wave = {
-        "data": trace.reshape(1, -1),
-        "UserData": {"info": "", "name": path.stem, "headerString": np.array([HEADER])},
-    }
-    sio.savemat(str(path), {path.stem: wave})
-
-
-@pytest.fixture
-def data_folder(tmp_path):
-    for cell, seeds in (("cellA", (1, 2)), ("cellB", (3,))):
-        (tmp_path / cell).mkdir()
-        for i, seed in enumerate(seeds):
-            write_sweep(tmp_path / cell / f"AD0_{i + 1}.mat", synthetic_trace(seed))
-    (tmp_path / "notes").mkdir()  # a folder without sweeps is ignored
-    return tmp_path
 
 
 def test_load_and_detect(data_folder):
@@ -130,3 +94,37 @@ def test_parameter_files_round_trip(tmp_path):
     path = tmp_path / "p.json"
     analysis.save_parameters(str(path), normal)
     assert analysis.load_parameters(str(path)) == normal
+
+
+def test_several_session_folders(session_folders):
+    day1 = os.path.normpath(str(session_folders / "day1"))
+    day2 = os.path.normpath(str(session_folders / "day2"))
+
+    # A folder of session folders opens as each of them; a session folder as itself.
+    sessions = det.find_sessions(str(session_folders))
+    assert [folder for folder, _ in sessions] == [day1, day2]
+    assert [folder for folder, _ in det.find_sessions(day2)] == [day2]
+    assert det.find_sessions(str(session_folders / "figures")) == []
+
+    # A cell name is used once: the first folder keeps it.
+    cells, skipped = det.merge_sessions(sessions)
+    assert [(c.name, c.folder) for c in cells] == [("cellC", day1), ("cellD", day2)]
+    assert skipped == {day2: ["cellC"]}
+
+    # Named folder-cell, the two cellC folders are different cells.
+    cells, skipped = det.merge_sessions(sessions, name_with_folder=True)
+    assert [c.name for c in cells] == ["day1-cellC", "day2-cellC", "day2-cellD"]
+    assert skipped == {}
+    one_set = [analysis.make_param_set(60, 15, 5, "EPSC")]
+    results = analysis.run_detection(
+        [day1, day2], {"day2-cellC": one_set}, log=lambda _: None, name_with_folder=True)
+    assert [r.cell for r in results] == ["day2-cellC"]
+    assert os.path.dirname(os.path.dirname(results[0].sweeps[0].path)) == day2
+
+    parameters = {name: [analysis.make_param_set(60, 15, 5, "EPSC")]
+                  for name in ("cellC", "cellD")}
+    log = []
+    results = analysis.run_detection([day1, day2], parameters, log=log.append)
+    assert [r.cell for r in results] == ["cellC", "cellD"]
+    assert os.path.dirname(os.path.dirname(results[0].sweeps[0].path)) == day1
+    assert any("Left out of day2" in line and "cellC" in line for line in log)

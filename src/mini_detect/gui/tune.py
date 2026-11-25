@@ -25,6 +25,7 @@ MODE_LABELS = [
     ("IPSC, high Cl⁻  (inward events)", "IPSC_high_Cl"),
 ]
 PEAK_COLOR = "#e03131"
+NO_CELL = "Add a session folder, then pick a cell."
 CACHE_SIZE = 40
 
 
@@ -35,7 +36,7 @@ class TunePanel(QWidget):
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self.session = session
-        self._cell = None           # (name, path, n sweeps)
+        self._cell = None           # the detection.Cell on screen
         self._all_files = {}        # cell path -> every sweep file
         self._samples = {}          # cell path -> the sweeps currently shown
         self._cache = OrderedDict() # file path -> loaded Sweep
@@ -57,10 +58,11 @@ class TunePanel(QWidget):
         layout = QHBoxLayout(self)
 
         left = QVBoxLayout()
-        self.header = QLabel("Choose a data folder, then pick a cell.")
+        self.header = QLabel(NO_CELL)
         self.header.setTextInteractionFlags(Qt.TextSelectableByMouse)
         left.addWidget(self.header)
         self.graphics = pg.GraphicsLayoutWidget()
+        self.graphics.setAcceptDrops(False)  # let folders dropped here reach the window
         left.addWidget(self.graphics, 1)
         hint = QLabel("Scroll to zoom, drag to pan. Right-click a trace and choose "
                       "View All to see the whole sweep. The grey band is the "
@@ -190,6 +192,9 @@ class TunePanel(QWidget):
 
     # ------------------------------------------------------------ choosing cell
 
+    def current_cell(self):
+        return self._cell
+
     def set_cell(self, cell):
         self._cell = cell
         self._refresh_saved()
@@ -197,7 +202,7 @@ class TunePanel(QWidget):
             self._token += 1
             self._set_enabled(False)
             self._clear_plots()
-            self.header.setText("Choose a data folder, then pick a cell.")
+            self.header.setText(NO_CELL)
             self.stats.setText("")
             return
         self._set_enabled(True)
@@ -208,7 +213,7 @@ class TunePanel(QWidget):
 
     def _load(self):
         """Make sure the sample sweeps for the current cell are loaded, then draw."""
-        name, path, _ = self._cell
+        name, path = self._cell.name, self._cell.path
         files = self._samples.get(path)
         if files is not None and all(f in self._cache for f in files):
             self._draw()
@@ -291,7 +296,8 @@ class TunePanel(QWidget):
         self._shown = []
 
     def _draw(self):
-        name, path, n_total = self._cell
+        name, path, n_total = self._cell.name, self._cell.path, self._cell.n_sweeps
+        session = os.path.basename(self._cell.folder)
         self._clear_plots()
         files = self._samples.get(path, [])
         sweeps = [self._cache[f] for f in files if isinstance(self._cache.get(f), det.Sweep)]
@@ -300,7 +306,7 @@ class TunePanel(QWidget):
         if failed:
             self.status.emit(f"Could not read: {', '.join(failed)}")
         self.header.setText(
-            f"<b>{name}</b> &nbsp; showing {len(sweeps)} of {n_total} sweeps")
+            f"<b>{name}</b> &nbsp; in {session} &nbsp; \u00b7 &nbsp; showing {len(sweeps)} of {n_total} sweeps")
         self._shown = sweeps
         if not sweeps:
             self.stats.setText("")

@@ -46,14 +46,29 @@ If `mini-detect` is not found, `python -m mini_detect` does the same thing.
 
 ## What you need
 
-1. **A data folder with one sub-folder per recording.** Each sub-folder holds
-   that recording's sweeps as `.mat` files. The sub-folder name is the cell name.
+1. **One or more session folders.** A session folder has one sub-folder per
+   cell, and each of those holds that cell's sweeps as `.mat` files.
 
    ```
    my_experiment/
-       EC101-1/   AD0_1.mat  AD0_2.mat  ...
-       EC101-1b/  AD0_1.mat  AD0_2.mat  ...
+       EC123/
+           1/    AD0_1.mat  AD0_2.mat  ...
+           1b/   AD0_1.mat  AD0_2.mat  ...
+       EC124/
+           1/    AD0_1.mat  AD0_2.mat  ...
    ```
+
+   You can open several session folders at once.
+
+   **Cell names.** A cell is named after its session folder and its own folder,
+   joined with a hyphen: the cells above are `EC123-1`, `EC123-1b` and `EC124-1`.
+   That name is what appears in parameter files, the metadata file and the
+   exported files. If your cell folders already carry the full name (a folder
+   called `EC123-1`), untick **Name cells folder-cell** at the top of the window
+   and each cell is named by its own folder alone. Each name can be used only
+   once, so with the box unticked, if two open folders have a cell folder with
+   the same name, the folder added first keeps it and the app shows how many
+   were left out.
 
 2. **Optionally, a metadata CSV** that lists each cell's condition, so results
    are grouped by condition. Tuning never shows the condition, so detection
@@ -61,13 +76,20 @@ If `mini-detect` is not found, `python -m mini_detect` does the same thing.
 
    ```
    Cell,Condition
-   EC101-1,Control
-   EC101-1b,Drug
+   EC123-1,Control
+   EC123-1b,Drug
    ```
 
 ## How to use it
 
-**1. Tune.** Choose the data folder, then click a cell. The app shows a few
+**1. Add your folders.** Click **Add folder…** and choose a session folder. To
+open several at once, choose the folder that contains them (`my_experiment`
+above), or drag the session folders onto the window. Click **Add folder…** again
+to add folders that live somewhere else. Each session folder appears in the list
+on the left with its cells below it. **Remove folder** takes the selected one
+off the list without deleting anything.
+
+**2. Tune.** Click a cell. The app shows a few
 random sweeps from that cell with the detected events marked in red. Change the
 event type and the three parameters until the marks look right; the plot updates
 as you type. Scroll to zoom and drag to pan.
@@ -82,11 +104,12 @@ Click **Save and go to next cell** to store the parameters and move on. A cell
 can have one saved set per event type, for example one for EPSCs and one for
 IPSCs. Cells without saved parameters are skipped later.
 
-Your saved parameters are remembered if you close the app and reopen the same
-data folder. Use **Save as…** under the cell list to keep them as a JSON file,
-and **Load…** to bring a JSON file back in.
+The open folders and your saved parameters are remembered when you close the app
+and come back the next time you start it. Use **Save as…** under the cell list
+to write the parameters of every cell, from all session folders, to one JSON
+file, and **Load…** to bring a JSON file back in.
 
-**2. Detect & export.** Choose an output folder, optionally a metadata file, and
+**3. Detect & export.** Detection runs on the cells of every open folder. Choose an output folder, optionally a metadata file, and
 click **Run detection**. When it finishes, the table shows each cell's event
 count, frequency, mean amplitude, series resistance (Rs), membrane resistance
 (Rm) and capacitance (Cm). Click **Export CSV files** to write:
