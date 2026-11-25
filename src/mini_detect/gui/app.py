@@ -8,7 +8,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
+    QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
     QSplitter, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -41,6 +41,14 @@ class MainWindow(QMainWindow):
         self.folder_label = QLabel("")
         self.folder_label.setWordWrap(True)
         row.addWidget(self.folder_label, 1)
+        self.name_check = QCheckBox("Name cells folder-cell")
+        self.name_check.setToolTip(
+            "A cell is named after its session folder and its own folder: folder 1 "
+            "inside EC123 is EC123-1. That is the name used in parameter files, the "
+            "metadata file and the exported files.\n\n"
+            "Turn this off if your cell folders already carry the full name "
+            "(a folder called EC123-1); cells are then named by their own folder alone.")
+        row.addWidget(self.name_check)
         self.add_btn = QPushButton("Add folder…")
         self.add_btn.setToolTip(
             "Add a session folder (one sub-folder of .mat sweeps per cell), or a "
@@ -66,7 +74,7 @@ class MainWindow(QMainWindow):
         self.tree.setHeaderLabels(["Cell", "Sweeps", "Saved parameters"])
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(14)
-        self.tree.setColumnWidth(0, 125)
+        self.tree.setColumnWidth(0, 140)
         self.tree.setColumnWidth(1, 60)
         left_layout.addWidget(self.tree, 1)
         buttons = QHBoxLayout()
@@ -93,6 +101,7 @@ class MainWindow(QMainWindow):
 
         self.add_btn.clicked.connect(self._choose_folder)
         self.remove_btn.clicked.connect(self._remove_folder)
+        self.name_check.toggled.connect(self._naming_toggled)
         self.tree.currentItemChanged.connect(self._row_selected)
         self.load_btn.clicked.connect(self._load_parameters)
         self.save_btn.clicked.connect(self._save_parameters)
@@ -115,6 +124,9 @@ class MainWindow(QMainWindow):
             settings.remove("data_folder")
         if folders:
             self.add_folders(folders, restoring=True)
+        else:
+            self.session.finish_restore()
+        self._sync_naming()
 
     def _show_status(self, text):
         self.statusBar().showMessage(text, 10000)
@@ -159,6 +171,8 @@ class MainWindow(QMainWindow):
         added = self.session.add_sessions(found, missing=empty if restoring else ())
         self._refresh_summary()
         if restoring:
+            self.session.finish_restore()
+            self._sync_naming()
             if self.session.parameters:
                 self._show_status(
                     f"Restored your {_plural(len(self.session.folders), 'session folder')} "
@@ -194,6 +208,17 @@ class MainWindow(QMainWindow):
             self._show_status(f"Removed {os.path.basename(folder)} from the list. "
                               "Its saved parameters are kept.")
 
+    def _sync_naming(self):
+        self.name_check.blockSignals(True)
+        self.name_check.setChecked(self.session.name_with_folder)
+        self.name_check.blockSignals(False)
+
+    def _naming_toggled(self, on):
+        self.session.set_name_with_folder(on)
+        if self.session.cells:
+            self._show_status(f"Cells are now named like {self.session.cells[0].name}. "
+                              "Their saved parameters were renamed to match.")
+
     def _refresh_summary(self):
         n = len(self.session.folders)
         if self._scans:
@@ -226,11 +251,10 @@ class MainWindow(QMainWindow):
         self.tree.clear()
         self._cell_items = {}
         self._folder_items = {}
-        loaded = {cell.path for cell in self.session.cells}
-        for folder, cells in self.session.sessions:
+        for folder in self.session.folders:
             top = self._add_folder_row(folder)
-            for cell in cells:
-                if cell.path not in loaded:  # left out: duplicate name
+            for cell in self.session.cells:  # cells left out as duplicates are not here
+                if cell.folder != folder:
                     continue
                 item = QTreeWidgetItem(top, [cell.name, str(cell.n_sweeps), ""])
                 item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
@@ -367,6 +391,18 @@ class MainWindow(QMainWindow):
         here = sum(1 for cell in parameters if cell in names)
         self._show_status(f"Loaded parameters for {len(parameters)} cells "
                           f"({here} of them are in the open folders).")
+        if not here and self.session.cells:
+            other_way = not self.session.name_with_folder
+            other_names = {det.cell_name(cell.folder, cell.path, other_way)
+                           for cell in self.session.cells}
+            if other_names.intersection(parameters):
+                QMessageBox.information(
+                    self, "Load parameters",
+                    "None of the cell names in this file match the open cells, but "
+                    "they would if \"Name cells folder-cell\" were turned "
+                    f"{'on' if other_way else 'off'}.\n\nThe file names cells like "
+                    f"{next(iter(parameters))}; the open cells are named like "
+                    f"{self.session.cells[0].name}.")
 
     def _save_parameters(self):
         from datetime import date

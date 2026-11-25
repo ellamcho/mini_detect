@@ -111,6 +111,16 @@ def test_several_session_folders(session_folders):
     assert [(c.name, c.folder) for c in cells] == [("cellC", day1), ("cellD", day2)]
     assert skipped == {day2: ["cellC"]}
 
+    # Named folder-cell, the two cellC folders are different cells.
+    cells, skipped = det.merge_sessions(sessions, name_with_folder=True)
+    assert [c.name for c in cells] == ["day1-cellC", "day2-cellC", "day2-cellD"]
+    assert skipped == {}
+    one_set = [analysis.make_param_set(60, 15, 5, "EPSC")]
+    results = analysis.run_detection(
+        [day1, day2], {"day2-cellC": one_set}, log=lambda _: None, name_with_folder=True)
+    assert [r.cell for r in results] == ["day2-cellC"]
+    assert os.path.dirname(os.path.dirname(results[0].sweeps[0].path)) == day2
+
     parameters = {name: [analysis.make_param_set(60, 15, 5, "EPSC")]
                   for name in ("cellC", "cellD")}
     log = []

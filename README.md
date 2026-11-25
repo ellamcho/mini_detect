@@ -47,22 +47,28 @@ If `mini-detect` is not found, `python -m mini_detect` does the same thing.
 ## What you need
 
 1. **One or more session folders.** A session folder has one sub-folder per
-   cell, and each of those holds that cell's sweeps as `.mat` files. The
-   sub-folder name is the cell name.
+   cell, and each of those holds that cell's sweeps as `.mat` files.
 
    ```
    my_experiment/
-       session_1/
-           EC101-1/   AD0_1.mat  AD0_2.mat  ...
-           EC101-1b/  AD0_1.mat  AD0_2.mat  ...
-       session_2/
-           EC103-1/   AD0_1.mat  AD0_2.mat  ...
+       EC123/
+           1/    AD0_1.mat  AD0_2.mat  ...
+           1b/   AD0_1.mat  AD0_2.mat  ...
+       EC124/
+           1/    AD0_1.mat  AD0_2.mat  ...
    ```
 
-   You can open several session folders at once. Parameters, the metadata file
-   and the exported files all identify a cell by its name, so each cell name
-   should be used only once. If two open folders have a cell with the same name,
-   the folder added first keeps it and the app shows how many were left out.
+   You can open several session folders at once.
+
+   **Cell names.** A cell is named after its session folder and its own folder,
+   joined with a hyphen: the cells above are `EC123-1`, `EC123-1b` and `EC124-1`.
+   That name is what appears in parameter files, the metadata file and the
+   exported files. If your cell folders already carry the full name (a folder
+   called `EC123-1`), untick **Name cells folder-cell** at the top of the window
+   and each cell is named by its own folder alone. Each name can be used only
+   once, so with the box unticked, if two open folders have a cell folder with
+   the same name, the folder added first keeps it and the app shows how many
+   were left out.
 
 2. **Optionally, a metadata CSV** that lists each cell's condition, so results
    are grouped by condition. Tuning never shows the condition, so detection
@@ -70,8 +76,8 @@ If `mini-detect` is not found, `python -m mini_detect` does the same thing.
 
    ```
    Cell,Condition
-   EC101-1,Control
-   EC101-1b,Drug
+   EC123-1,Control
+   EC123-1b,Drug
    ```
 
 ## How to use it

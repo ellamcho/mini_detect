@@ -126,21 +126,32 @@ def find_sessions(folder: str) -> list[tuple]:
     return found
 
 
-def merge_sessions(sessions) -> tuple:
-    """Flatten [(session_folder, cells)] into one list of cells.
+def cell_name(session_folder: str, cell_folder: str, name_with_folder: bool) -> str:
+    """The name a cell goes by: its own folder name, or, with `name_with_folder`,
+    the session folder's name joined to it (folder 1 inside EC123 is EC123-1)."""
+    own = os.path.basename(os.path.normpath(cell_folder))
+    if not name_with_folder:
+        return own
+    return f"{os.path.basename(os.path.normpath(session_folder))}-{own}"
 
-    Parameters, metadata and exports all identify a cell by its folder name, so
-    a name can be used only once: the first session that has it keeps it.
+
+def merge_sessions(sessions, name_with_folder: bool = False) -> tuple:
+    """Flatten [(session_folder, cells)] into one list of cells, named as
+    cell_name() describes.
+
+    Parameters, metadata and exports all identify a cell by its name, so a name
+    can be used only once: the first session that has it keeps it.
     Returns (cells, skipped) where skipped is {session_folder: [names left out]}.
     """
     cells, seen, skipped = [], set(), {}
     for folder, session_cells in sessions:
         for cell in session_cells:
-            if cell.name in seen:
-                skipped.setdefault(folder, []).append(cell.name)
+            name = cell_name(folder, cell.path, name_with_folder)
+            if name in seen:
+                skipped.setdefault(folder, []).append(name)
             else:
-                seen.add(cell.name)
-                cells.append(cell)
+                seen.add(name)
+                cells.append(cell._replace(name=name))
     return cells, skipped
 
 

@@ -71,6 +71,9 @@ class Session(QObject):
         self.cells = []        # every loaded Cell, across all session folders
         self.skipped = {}      # {session folder: [cell names left out as duplicates]}
         self.parameters = {}   # {cell name: [param set, ...]}
+        # Name cells sessionfolder-cellfolder (EC123-1) rather than cellfolder alone.
+        self.name_with_folder = True
+        self._rename_after_restore = False
 
     # -- session folders
 
@@ -86,9 +89,39 @@ class Session(QObject):
     def restore(self) -> list:
         """Load the parameters autosaved last time. Returns the session folders
         that were open then, for the caller to scan and add again."""
-        folders, self.parameters = self._read_autosave()
+        data = self._read_autosave()
+        if data is None:
+            return []
+        self.parameters = analysis.normalize_parameters(data.get("parameters"))
+        if "name_with_folder" in data:
+            self.name_with_folder = bool(data["name_with_folder"])
+        else:
+            # Saved before cells were named after their session folder: open it
+            # the way it was saved, then rename once the folders are back.
+            self.name_with_folder = False
+            self._rename_after_restore = True
         self.parameters_changed.emit()
-        return folders
+        return [f for f in data.get("folders", []) if isinstance(f, str)]
+
+    def finish_restore(self) -> None:
+        """Call once the folders returned by restore() have been added again."""
+        if self._rename_after_restore:
+            self._rename_after_restore = False
+            self.set_name_with_folder(True)
+
+    def set_name_with_folder(self, on: bool) -> None:
+        """Switch between naming cells sessionfolder-cellfolder and cellfolder
+        alone. Saved parameters of the open cells are renamed to match."""
+        before = {cell.path: cell.name for cell in self.cells}
+        self.name_with_folder = bool(on)
+        self.cells, self.skipped = det.merge_sessions(self.sessions, self.name_with_folder)
+        for cell in self.cells:
+            old = before.get(cell.path)
+            if old in self.parameters and cell.name not in self.parameters:
+                self.parameters[cell.name] = self.parameters.pop(old)
+        self._write_autosave()
+        self.cells_changed.emit()
+        self.parameters_changed.emit()
 
     def add_sessions(self, found, missing=()) -> list:
         """Add scanned session folders, as [(folder, cells)]; a folder that is
@@ -112,7 +145,7 @@ class Session(QObject):
         self._folders_changed()
 
     def _folders_changed(self):
-        self.cells, self.skipped = det.merge_sessions(self.sessions)
+        self.cells, self.skipped = det.merge_sessions(self.sessions, self.name_with_folder)
         self._write_autosave()
         self.cells_changed.emit()
 
@@ -154,18 +187,19 @@ class Session(QObject):
         base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
         return os.path.join(base, "workspace.json")
 
-    def _read_autosave(self) -> tuple:
-        """(session folders, parameters) as they were when the app last closed."""
+    def _read_autosave(self):
+        """What was saved when the app last closed, or None if there is nothing."""
         try:
             with open(self._autosave_path(), "r") as f:
                 data = json.load(f)
-            folders = [f for f in data.get("folders", []) if isinstance(f, str)]
-            return folders, analysis.normalize_parameters(data.get("parameters"))
-        except (OSError, ValueError, AttributeError):
-            return [], {}
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def _write_autosave(self):
-        data = {"folders": self.folders + self.missing, "parameters": self.parameters}
+        data = {"folders": self.folders + self.missing,
+                "name_with_folder": self.name_with_folder,
+                "parameters": self.parameters}
         try:
             path = self._autosave_path()
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -186,6 +220,9 @@ class Session(QObject):
             os.remove(path)
         except (OSError, ValueError):
             return False
-        new = {cell: sets for cell, sets in old.items() if cell not in self.parameters}
+        # That version named each cell by its own folder alone.
+        renamed = {det.cell_name(folder, cell, self.name_with_folder): sets
+                   for cell, sets in old.items()}
+        new = {cell: sets for cell, sets in renamed.items() if cell not in self.parameters}
         self.parameters.update(new)
         return bool(new)

@@ -163,13 +163,17 @@ def _try_load(path):
         return None, exc
 
 
-def run_detection(folders, parameters, progress=None, cancelled=None, log=print):
+def run_detection(folders, parameters, progress=None, cancelled=None, log=print,
+                  name_with_folder=False):
     """Detect events in every cell that has saved parameters, in one session
-    folder or a list of them. See detect_cells for the other arguments."""
+    folder or a list of them. With `name_with_folder`, cells are named
+    sessionfolder-cellfolder (as the app does by default) rather than by their
+    own folder name. See detect_cells for the other arguments."""
     if isinstance(folders, (str, os.PathLike)):
         folders = [folders]
     cells, skipped = det.merge_sessions(
-        [(str(folder), det.scan_cells(str(folder))) for folder in folders])
+        [(str(folder), det.scan_cells(str(folder))) for folder in folders],
+        name_with_folder)
     for folder, names in skipped.items():
         log(f"Left out of {os.path.basename(folder)} (same name as a cell in another "
             f"folder): {', '.join(names)}")

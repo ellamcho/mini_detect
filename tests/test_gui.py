@@ -63,16 +63,18 @@ def snapshot(app, window, name):
 
 
 def test_whole_workflow(app, data_folder, tmp_path):
+    cell_a, cell_b = f"{data_folder.name}-cellA", f"{data_folder.name}-cellB"
     window = MainWindow()
     window.show()
     window.add_folders([str(data_folder)])
     wait_for(app, lambda: len(window.session.cells) == 2)
-    assert [c[0] for c in window.session.cells] == ["cellA", "cellB"]
+    # Cells are named after the session folder and their own folder.
+    assert [c.name for c in window.session.cells] == [cell_a, cell_b]
 
     # Tune: sweeps are drawn and events are marked.
     tune = window.tune
     wait_for(app, lambda: len(tune._shown) == 2)
-    assert tune._cell[0] == "cellA"
+    assert tune.current_cell().name == cell_a
     assert sum(len(scatter.getData()[0]) for _, scatter in tune._plots) >= 15
 
     # Changing a parameter re-runs detection on screen.
@@ -88,9 +90,11 @@ def test_whole_workflow(app, data_folder, tmp_path):
 
     # Save and move through both cells.
     tune.save_next.click()
-    wait_for(app, lambda: tune._cell[0] == "cellB" and len(tune._shown) == 1)
+    wait_for(app, lambda: tune.current_cell().name == cell_b and len(tune._shown) == 1)
     tune.save_next.click()
     wait_for(app, lambda: window.session.n_tuned() == 2)
+    assert sorted(window.session.parameters) == [cell_a, cell_b]
+    assert window.tree.topLevelItem(0).child(0).text(0) == cell_a
     assert window.tree.topLevelItem(0).child(0).text(2) == "EPSC 60/15/5"
 
     # Detect and export.
@@ -98,7 +102,7 @@ def test_whole_workflow(app, data_folder, tmp_path):
     window.tabs.setCurrentIndex(1)
     out = tmp_path / "out"
     metadata = tmp_path / "metadata.csv"
-    metadata.write_text("Cell,Condition\ncellA,control\ncellB,drug\n")
+    metadata.write_text(f"Cell,Condition\n{cell_a},control\n{cell_b},drug\n")
     run._set_metadata(str(metadata))
     run.output.setText(str(out))
     run.tag.setText("test")
@@ -113,7 +117,7 @@ def test_whole_workflow(app, data_folder, tmp_path):
     snapshot(app, window, "export")
 
     combined = pd.read_csv(out / "Frequency_combined_test.csv")
-    assert list(combined["Cell_Name"]) == ["cellA", "cellB"]
+    assert list(combined["Cell_Name"]) == [cell_a, cell_b]
     assert list(combined["Condition"]) == ["control", "drug"]
     assert (combined["Frequency_Value"] > 1).all()
     for name in ("control_Amplitude_test.csv", "drug_IPI_by_cell_test.csv",
@@ -133,48 +137,91 @@ def test_several_session_folders(app, session_folders, tmp_path):
     day2 = os.path.normpath(str(session_folders / "day2"))
     window = MainWindow()
     window.show()
+    names = lambda: [c.name for c in window.session.cells]  # noqa: E731
 
-    # Adding the folder that holds the session folders opens both of them.
+    # Adding the folder that holds the session folders opens both of them. Both
+    # have a folder called cellC; naming cells folder-cell keeps them apart.
     window.add_folders([str(session_folders)])
-    wait_for(app, lambda: len(window.session.cells) == 2)
+    wait_for(app, lambda: len(window.session.cells) == 3)
     assert [os.path.basename(f) for f in window.session.folders] == ["day1", "day2"]
-    assert [c.name for c in window.session.cells] == ["cellC", "cellD"]
+    assert names() == ["day1-cellC", "day2-cellC", "day2-cellD"]
+    assert window.name_check.isChecked()
     assert window.tree.topLevelItemCount() == 2
-    assert "1 left out" in window.tree.topLevelItem(1).text(0)  # the second cellC
+    assert "left out" not in window.tree.topLevelItem(1).text(0)
 
     # Tune every cell across both folders, then save them to one file.
     tune = window.tune
-    wait_for(app, lambda: tune.current_cell() is not None and len(tune._shown) == 1)
-    assert tune.current_cell().name == "cellC"
-    tune.save_next.click()
-    wait_for(app, lambda: tune.current_cell().name == "cellD" and len(tune._shown) == 1)
-    tune.save_next.click()
-    wait_for(app, lambda: window.session.n_tuned() == 2)
+    for name in names():
+        wait_for(app, lambda: tune.current_cell() is not None
+                 and tune.current_cell().name == name and len(tune._shown) == 1)
+        tune.save_next.click()
+    wait_for(app, lambda: window.session.n_tuned() == 3)
     saved = tmp_path / "all_sessions.json"
     window.save_parameters_to(str(saved))
-    assert sorted(json.loads(saved.read_text())) == ["cellC", "cellD"]
+    assert sorted(json.loads(saved.read_text())) == names()
     snapshot(app, window, "two_folders")
 
     # Detection covers the cells of every open folder.
     run = window.run
     run.run.click()
     wait_for(app, lambda: run.results is not None and run._job is None)
-    assert [r.cell for r in run.results] == ["cellC", "cellD"]
+    assert [r.cell for r in run.results] == names()
+
+    # With the naming turned off a cell goes by its own folder name. The second
+    # cellC then clashes and is left out; saved parameters follow the new names.
+    window.name_check.setChecked(False)
+    wait_for(app, lambda: len(window.session.cells) == 2)
+    assert names() == ["cellC", "cellD"]
+    assert "1 left out" in window.tree.topLevelItem(1).text(0)
+    assert window.session.n_tuned() == 2
+    assert tune.current_cell().name in names()
+    window.name_check.setChecked(True)
+    wait_for(app, lambda: len(window.session.cells) == 3)
+    assert window.session.n_tuned() == 3
+    assert sorted(window.session.parameters) == names()
 
     # Removing a folder keeps its parameters; adding it back restores its cells.
     window.tree.setCurrentItem(window.tree.topLevelItem(1))
     assert window.remove_btn.isEnabled()
     window.remove_btn.click()
     wait_for(app, lambda: len(window.session.cells) == 1)
-    assert "cellD" in window.session.parameters
+    assert "day2-cellD" in window.session.parameters
     drop = QMimeData()
     drop.setUrls([QUrl.fromLocalFile(day2)])  # as if dragged onto the window
     window.dropEvent(QDropEvent(QPointF(20, 20), Qt.CopyAction, drop,
                                 Qt.LeftButton, Qt.NoModifier))
-    wait_for(app, lambda: len(window.session.cells) == 2)
+    wait_for(app, lambda: len(window.session.cells) == 3)
+    assert window.session.n_tuned() == 3
+    window.close()
+
+
+def test_saved_state_from_before_folder_names(app, session_folders):
+    """State saved by a version that named cells by their own folder alone is
+    opened as it was, then renamed to folder-cell without losing parameters."""
+    one_set = [{"window_size": 60, "sample_step": 15, "interval": 5, "mode": "EPSC"}]
+    autosave = state.Session._autosave_path(None)
+    os.makedirs(os.path.dirname(autosave), exist_ok=True)
+    with open(autosave, "w") as f:
+        json.dump({"folders": [str(session_folders / "day1"), str(session_folders / "day2")],
+                   "parameters": {"cellC": one_set, "cellD": one_set}}, f)
+
+    window = MainWindow()
+    wait_for(app, lambda: len(window.session.cells) == 3)
+    assert window.name_check.isChecked()
+    assert sorted(window.session.parameters) == ["day1-cellC", "day2-cellD"]
     assert window.session.n_tuned() == 2
     window.close()
 
+    # The choice is remembered: turned off, it stays off after a restart.
+    window = MainWindow()
+    wait_for(app, lambda: len(window.session.cells) == 3)
+    window.name_check.setChecked(False)
+    window.close()
+    window = MainWindow()
+    wait_for(app, lambda: len(window.session.cells) == 2)
+    assert not window.name_check.isChecked()
+    assert sorted(window.session.parameters) == ["cellC", "cellD"]
+    window.close()
 
 
 def test_background_results_always_arrive(app):
