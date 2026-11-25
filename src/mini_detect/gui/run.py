@@ -129,11 +129,17 @@ class RunPanel(QWidget):
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
         self.export = QPushButton("Export CSV files")
+        self.plot = QPushButton("Plot results")
+        self.plot.setToolTip(
+            "Shows one dot per cell with a bar at the mean, for every measurement, "
+            "by condition or by day. Uses the metadata file and the Rs limit chosen "
+            "above, and can save the figures as PDF and PNG.")
         self.open_folder = QPushButton("Open output folder")
         row.addWidget(self.run)
         row.addWidget(self.cancel)
         row.addWidget(self.progress, 1)
         row.addWidget(self.export)
+        row.addWidget(self.plot)
         row.addWidget(self.open_folder)
         layout.addLayout(row)
 
@@ -159,6 +165,7 @@ class RunPanel(QWidget):
         self.run.clicked.connect(self._run)
         self.cancel.clicked.connect(self._cancel)
         self.export.clicked.connect(self._export)
+        self.plot.clicked.connect(self._plot)
         self.open_folder.clicked.connect(self._open_output)
         self.output.textChanged.connect(self._refresh_buttons)
         self.cell_column.currentIndexChanged.connect(self._update_match)
@@ -274,6 +281,7 @@ class RunPanel(QWidget):
         self.progress.setVisible(running)
         ready = self.results is not None and not self._stale and not running
         self.export.setEnabled(ready and bool(self.output.text().strip()))
+        self.plot.setEnabled(ready)
         self.open_folder.setEnabled(os.path.isdir(self.output.text().strip()))
         if running:
             return
@@ -394,6 +402,27 @@ class RunPanel(QWidget):
         self.remember()
         self.status.emit(f"Wrote {len(written)} files to {output}")
         self._refresh_buttons()
+
+    def _plot(self):
+        """Open the plot window for the current results."""
+        threshold = self.rs_value.value() if self.rs_enabled.isChecked() else None
+        kept = analysis.apply_rs_threshold(self.results, threshold, log=lambda _: None)
+        if not kept:
+            QMessageBox.information(
+                self, "Plot results",
+                "There is nothing to plot: every cell is above the Rs limit, or its "
+                "Rs could not be measured. Untick the Rs limit to plot them anyway.")
+            return
+        left_out = len(self.results) - len(kept)
+        note = ""
+        if left_out:
+            note = (f"{left_out} left out: Rs above {threshold:g} M\u03a9 "
+                    "or not measurable.")
+        from .plot_window import PlotWindow  # loads matplotlib only when it is needed
+        self.plot_window = PlotWindow(
+            kept, self.conditions(), self.tag.text().strip(), self.output.text().strip(),
+            note, self)
+        self.plot_window.show()
 
     def _open_output(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.output.text().strip()))

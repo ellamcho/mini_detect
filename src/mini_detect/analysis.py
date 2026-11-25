@@ -97,6 +97,7 @@ class CellResult:
     params: dict
     sweeps: list
     passive: list  # per sweep: (Rs, Rm, Cm, tau)
+    session: str = ""  # name of the session folder (the recording day) the cell is in
 
     @property
     def n_events(self) -> int:
@@ -187,17 +188,18 @@ def detect_cells(cells, parameters, progress=None, cancelled=None, log=print):
     polled between sweeps. Returns a list of CellResult, or None if cancelled.
     """
     jobs = [
-        (cell.name, det.list_sweeps(cell.path))
+        (cell.name, det.list_sweeps(cell.path),
+         os.path.basename(os.path.normpath(cell.folder)))
         for cell in cells
         if parameters.get(cell.name)
     ]
-    total = sum(len(files) for _, files in jobs)
+    total = sum(len(files) for _, files, _ in jobs)
     done = 0
     results = []
     # Reading over a network drive dominates the run time, so read a few sweeps at once.
     pool = ThreadPoolExecutor(max_workers=4)
     try:
-        for name, files in jobs:
+        for name, files, session in jobs:
             param_sets = parameters[name]
             per_set = [[] for _ in param_sets]
             passive = []
@@ -222,7 +224,8 @@ def detect_cells(cells, parameters, progress=None, cancelled=None, log=print):
                 if progress is not None:
                     progress(done, total, name)
             for i, (p, bucket) in enumerate(zip(param_sets, per_set), start=1):
-                result = CellResult(name, p["mode"], i, len(param_sets), p, bucket, passive)
+                result = CellResult(name, p["mode"], i, len(param_sets), p, bucket, passive,
+                                    session)
                 results.append(result)
                 log(f"{result.label}: {result.n_events} events in {len(files)} sweeps "
                     f"({describe_param_set(p)})")
@@ -280,6 +283,23 @@ def _unique(name: str, taken) -> str:
     return candidate
 
 
+def apply_rs_threshold(results, rs_threshold, log=print) -> list:
+    """Results without the cells whose mean series resistance is above
+    `rs_threshold` or could not be measured. None keeps everything."""
+    if rs_threshold is None:
+        return list(results)
+    kept = []
+    for r in results:
+        rs = r.mean_rs
+        if np.isnan(rs):
+            log(f"Excluded {r.label}: series resistance could not be measured")
+        elif rs > rs_threshold:
+            log(f"Excluded {r.label}: mean Rs {rs:.1f} MOhm > {rs_threshold:g} MOhm")
+        else:
+            kept.append(r)
+    return kept
+
+
 def passive_table(results, condition_of) -> pd.DataFrame:
     rows = []
     for r in results:
@@ -332,17 +352,7 @@ def export_results(results, output_dir, tag, conditions=None, rs_threshold=None,
         if missing:
             log(f"Not in the metadata file, exported as 'Unknown': {', '.join(missing)}")
 
-    if rs_threshold is not None:
-        kept = []
-        for r in results:
-            rs = r.mean_rs
-            if np.isnan(rs):
-                log(f"Excluded {r.label}: series resistance could not be measured")
-            elif rs > rs_threshold:
-                log(f"Excluded {r.label}: mean Rs {rs:.1f} MOhm > {rs_threshold:g} MOhm")
-            else:
-                kept.append(r)
-        results = kept
+    results = apply_rs_threshold(results, rs_threshold, log)
 
     grouped = {}
     for r in results:
