@@ -167,6 +167,25 @@ def test_several_session_folders(app, session_folders, tmp_path):
     wait_for(app, lambda: run.results is not None and run._job is None)
     assert [r.cell for r in run.results] == names()
 
+    # Plot the results: one figure for all days, or one per day; then save them.
+    run.output.setText(str(tmp_path / "out"))
+    run.rs_enabled.setChecked(False)
+    assert run.plot.isEnabled()
+    run.plot.click()
+    plot_window = run.plot_window
+    wait_for(app, plot_window.isVisible)
+    assert plot_window.which.count() == 1 and "all days" in plot_window.which.itemText(0)
+    plot_window.by.setCurrentIndex(1)
+    assert [plot_window.which.itemText(i).split()[1] for i in range(2)] == ["day1", "day2"]
+    plot_window.which.setCurrentIndex(1)
+    snapshot(app, plot_window, "plots")
+    plot_window.save_btn.click()
+    saved_plots = sorted(os.listdir(tmp_path / "out" / "plots"))
+    assert [n for n in saved_plots if n.endswith(".pdf")] == [
+        f"{run.tag.text()}_day1_EPSC.pdf", f"{run.tag.text()}_day2_EPSC.pdf"]
+    assert len(saved_plots) == 4
+    plot_window.close()
+
     # With the naming turned off a cell goes by its own folder name. The second
     # cellC then clashes and is left out; saved parameters follow the new names.
     window.name_check.setChecked(False)

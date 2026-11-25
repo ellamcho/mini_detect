@@ -1,0 +1,105 @@
+"""Window that shows the summary plots and saves them."""
+from __future__ import annotations
+
+import os
+
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QScrollArea, QVBoxLayout,
+)
+
+from .. import plots
+
+
+class PlotWindow(QDialog):
+    def __init__(self, results, conditions, tag, output_dir, note="", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Plots")
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.results = results
+        self.conditions = conditions
+        self.tag = tag
+        self.output_dir = output_dir
+        self.limits = plots.axis_limits(results)
+        self.specs = []
+        self.saved_to = ""
+
+        layout = QVBoxLayout(self)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Plot"))
+        self.by = QComboBox()
+        self.by.addItem("By condition  (all days together)", plots.BY_CONDITION)
+        self.by.addItem("By day  (conditions compared within each day)", plots.BY_DAY)
+        self.by.setToolTip("A day is one session folder. By day gives one figure per "
+                           "session folder, comparing the conditions recorded in it.")
+        row.addWidget(self.by)
+        row.addSpacing(16)
+        row.addWidget(QLabel("Figure"))
+        self.which = QComboBox()
+        self.which.setMinimumWidth(260)
+        row.addWidget(self.which)
+        row.addStretch(1)
+        self.save_btn = QPushButton("Save all as PDF and PNG")
+        self.save_btn.setToolTip(
+            "Saves every figure in the list. The PDF keeps text editable for Illustrator.")
+        row.addWidget(self.save_btn)
+        self.open_btn = QPushButton("Open folder")
+        self.open_btn.setEnabled(False)
+        row.addWidget(self.open_btn)
+        layout.addLayout(row)
+
+        self.info = QLabel(
+            "One dot per cell; the black bar is the mean. " + note)
+        self.info.setWordWrap(True)
+        layout.addWidget(self.info)
+
+        self.scroll = QScrollArea()
+        self.scroll.setAlignment(Qt.AlignCenter)
+        self.scroll.setStyleSheet("QScrollArea { background: white; }")
+        layout.addWidget(self.scroll, 1)
+
+        self.by.currentIndexChanged.connect(self._rebuild)
+        self.which.currentIndexChanged.connect(self._show)
+        self.save_btn.clicked.connect(self._save)
+        self.open_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.saved_to)))
+        self._rebuild()
+
+        width, height = plots.figure_size(self.specs[0]) if self.specs else (9, 3)
+        screen = self.screen().availableGeometry().width() if self.screen() else 1500
+        self.resize(min(int(width * 100) + 60, screen - 80), int(height * 100) + 150)
+
+    def _rebuild(self):
+        self.specs = plots.build_figures(self.results, self.conditions, self.by.currentData())
+        self.which.blockSignals(True)
+        self.which.clear()
+        self.which.addItems([spec.title for spec in self.specs])
+        self.which.blockSignals(False)
+        self._show(0)
+
+    def _show(self, index):
+        if not 0 <= index < len(self.specs):
+            return
+        figure = plots.make_figure(self.specs[index], self.limits)
+        canvas = FigureCanvasQTAgg(figure)
+        width, height = figure.get_size_inches()
+        canvas.setFixedSize(int(width * figure.dpi), int(height * figure.dpi))
+        self.scroll.setWidget(canvas)  # the scroll area deletes the previous canvas
+
+    def _save(self):
+        folder = os.path.join(self.output_dir, "plots") if self.output_dir else ""
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Choose where to save the plots")
+            if not folder:
+                return
+        try:
+            written = plots.save_figures(self.specs, self.limits, folder, self.tag)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save plots", f"Could not save the plots:\n{exc}")
+            return
+        self.saved_to = folder
+        self.open_btn.setEnabled(True)
+        self.info.setText(f"Saved {len(written)} files to {folder}")

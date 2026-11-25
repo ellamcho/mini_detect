@@ -127,6 +127,21 @@ count, frequency, mean amplitude, series resistance (Rs), membrane resistance
 With "Leave out cells with Rs above" ticked, cells whose mean series resistance
 is above the limit, or could not be measured, are left out of every file.
 
+**4. Plot the results.** After detection, click **Plot results** to see every
+measurement (frequency, amplitude, Rs, Rm and Cm) with one dot per cell and a
+black bar at the mean, conditions side by side. Choose how to split the cells:
+
+- **By condition** puts the cells from all days together, one figure per event
+  type.
+- **By day** makes one figure per session folder, comparing the conditions
+  recorded that day. Every figure uses the same axis ranges so days can be
+  compared.
+
+The plots use the metadata file and the Rs limit chosen on the tab; without a
+metadata file all cells form one group. **Save all as PDF and PNG** writes every
+figure in the list to a `plots` folder inside the output folder. Text in the PDF
+stays editable in Illustrator.
+
 ## How detection works
 
 Each sweep is band-pass filtered (1–3000 Hz). The app looks for stretches where
