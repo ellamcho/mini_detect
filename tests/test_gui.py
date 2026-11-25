@@ -31,11 +31,21 @@ def app(tmp_path, monkeypatch):
     return create_app([])
 
 
+def describe(window):
+    session = window.session
+    return (f"scans running: {window._scans}; folders: {session.folders}; "
+            f"missing: {session.missing}; cells: {[c.name for c in session.cells]}; "
+            f"status: {window.statusBar().currentMessage()!r}")
+
+
 def wait_for(app, condition, timeout=60):
     deadline = time.time() + timeout
     while not condition():
         app.processEvents(QEventLoop.AllEvents, 50)
-        assert time.time() < deadline, "timed out waiting for the window"
+        if time.time() > deadline:
+            windows = [w for w in app.topLevelWidgets() if isinstance(w, MainWindow)]
+            pytest.fail("timed out waiting for the window\n"
+                        + "\n".join(describe(w) for w in windows))
     for _ in range(5):
         app.processEvents(QEventLoop.AllEvents, 50)
 
