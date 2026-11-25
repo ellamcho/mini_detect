@@ -27,11 +27,6 @@ class Job(QObject):
         self._fn = fn
         self.token = token
         self._cancel = threading.Event()
-        self.done.connect(self._finished)
-        self.failed.connect(self._finished)
-
-    def _finished(self, _token=None, _result=None):
-        self.deleteLater()
 
     def start(self):
         threading.Thread(target=self._run, daemon=True).start()
@@ -49,6 +44,13 @@ class Job(QObject):
             self._emit(self.failed, self.token, traceback.format_exc())
         else:
             self._emit(self.done, self.token, result)
+        # Tidy up only now that the result has been handed over in full. Deleting
+        # the job from a slot on `done` could run while this thread was still
+        # delivering `done` to the other slots, and they then never got it.
+        try:
+            self.deleteLater()
+        except RuntimeError:
+            pass
 
     @staticmethod
     def _emit(signal, *args):

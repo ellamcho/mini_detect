@@ -175,3 +175,27 @@ def test_several_session_folders(app, session_folders, tmp_path):
     assert window.session.n_tuned() == 2
     window.close()
 
+
+
+def test_background_results_always_arrive(app):
+    """Every background job must report back. Jobs used to delete themselves
+    while their result was still being delivered, which lost it now and then."""
+    from PySide6.QtCore import QObject
+
+    class Receiver(QObject):
+        def __init__(self):
+            super().__init__()
+            self.got = set()
+
+        def on_done(self, token, _result):
+            self.got.add(token)
+
+    receiver = Receiver()
+    for i in range(500):
+        job = state.Job(receiver, lambda job: None, token=i)
+        job.done.connect(receiver.on_done)
+        job.start()
+        deadline = time.time() + 5
+        while i not in receiver.got and time.time() < deadline:
+            app.processEvents(QEventLoop.AllEvents, 50)
+        assert i in receiver.got, f"the result of job {i} never arrived"
