@@ -21,6 +21,7 @@ COLUMNS = ["Cell", "Event type", "Parameters", "Sweeps", "Events", "Frequency (H
            "Amplitude (pA)", "Rs (MΩ)", "Rm (MΩ)", "Cm (pF)"]
 RESULTS_SUFFIX = "_detection_results.json"
 PKL_SUFFIX = "_optimized_results.pkl"
+PARAMETERS_SUFFIX = "_optimized_parameters.json"
 EXPORT_LABELS = [
     ("summary", "Mean amplitude and frequency per cell"),
     ("passive", "Rs, Rm and Cm per cell"),
@@ -133,8 +134,9 @@ class RunPanel(QWidget):
         self.load.setToolTip(
             "Bring back the results of an earlier detection run, so you can plot or "
             "export them again without re-running detection. Choose the "
-            "_detection_results.json file (or the .pkl saved next to it) that "
-            "Export CSV files wrote.")
+            "_detection_results.json or the .pkl file that Export CSV files wrote. "
+            "A .pkl from an older version or from the notebook works too: its "
+            "recordings are read once, for their lengths, Rs, Rm and Cm.")
         self.cancel = QPushButton("Cancel")
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
@@ -376,13 +378,24 @@ class RunPanel(QWidget):
         QMessageBox.critical(self, "Detection failed", text.strip().splitlines()[-1])
         self._refresh_buttons()
 
+    def _on_load_failed(self, _token, text):
+        self._job = None
+        reason = text.strip().splitlines()[-1]
+        if reason.startswith("ValueError: "):   # one of our own explanations
+            reason = reason[len("ValueError: "):]
+        else:
+            self.log.appendPlainText(text)
+        QMessageBox.warning(self, "Load results", f"Could not load this file:\n\n{reason}.")
+        self._refresh_buttons()
+
     def _fill_table(self):
         self.table.setRowCount(len(self.results))
         for row, r in enumerate(self.results):
             p = r.params
             cells = [
                 r.cell, r.mode,
-                f"{p['window_size']} / {p['sample_step']} / {p['interval']}",
+                (f"{p['window_size']} / {p['sample_step']} / {p['interval']}"
+                 if "window_size" in p else "\u2014"),
                 str(len(r.sweeps)), str(r.n_events),
                 _num(r.frequency_hz, 2), _num(r.mean_amplitude, 1),
                 _num(r.mean_rs, 1), _num(r.mean_rm, 1), _num(r.mean_cm, 1),
@@ -437,31 +450,74 @@ class RunPanel(QWidget):
     def load_results(self, path):
         """Show results saved by an earlier export instead of running detection."""
         if path.lower().endswith((".pkl", ".pickle")):
-            # The .pkl holds only the raw detections, for the notebooks. The file
-            # saved beside it has everything.
-            beside = path[:-len(PKL_SUFFIX)] + RESULTS_SUFFIX
-            if path.endswith(PKL_SUFFIX) and os.path.isfile(beside):
-                path = beside
-            else:
-                QMessageBox.information(
-                    self, "Load results",
-                    "This .pkl file was saved by an earlier version and does not hold "
-                    "everything that is needed (recording lengths, Rs, Rm and Cm).\n\n"
-                    "Run detection once more and click Export CSV files. That saves a "
-                    f"file ending in {RESULTS_SUFFIX} next to the .pkl, and from then "
-                    "on either file can be loaded here straight away.")
+            # The .pkl holds only the detected events, for the notebooks. The
+            # file saved beside it has everything.
+            beside = _beside(path, RESULTS_SUFFIX)
+            if not os.path.isfile(beside):
+                self._load_legacy(path)
                 return
+            path = beside
         try:
             results, saved = analysis.load_results(path)
         except Exception as exc:
             QMessageBox.warning(self, "Load results", f"Could not read this file:\n{exc}")
             return
+        self._show_loaded(results, path, saved)
+
+    def _load_legacy(self, path):
+        """A .pkl with no results file beside it (from an older version, or from
+        the notebook): keep its events, and read each recording once for the
+        rest. The cells' settings come from the parameter file saved with it,
+        or else from the parameters saved in the app."""
+        parameters = {cell: [dict(p) for p in sets]
+                      for cell, sets in self.session.parameters.items()}
+        try:
+            parameters.update(analysis.load_parameters(_beside(path, PARAMETERS_SUFFIX)))
+        except (OSError, ValueError):
+            pass
+
+        def work(job):
+            return analysis.load_legacy_results(
+                path, parameters,
+                progress=job.progress.emit, cancelled=job.cancelled, log=job.message.emit)
+
+        self._job = Job(self, work, token=path)
+        self._job.progress.connect(self._on_progress)
+        self._job.message.connect(self.log.appendPlainText)
+        self._job.done.connect(self._on_legacy_loaded)
+        self._job.failed.connect(self._on_load_failed)
+        self.progress.setRange(0, 0)
+        self.log.appendPlainText(
+            f"Loading {path}\nThis file holds the detected events only. Reading each "
+            "recording once for its length, Rs, Rm and Cm; detection is not run again.")
+        self._refresh_buttons()
+        self.note.setText("Reading the recordings (once, for their lengths, Rs, Rm and Cm)\u2026")
+        self._job.start()
+
+    def _on_legacy_loaded(self, path, results):
+        self._job = None
+        if results is None:
+            self.log.appendPlainText("Loading cancelled.")
+            self._refresh_buttons()
+            return
+        beside = _beside(path, RESULTS_SUFFIX)
+        try:
+            analysis.save_results(beside, results)
+            self.log.appendPlainText(
+                f"Saved {os.path.basename(beside)} next to it, so next time this "
+                "loads straight away.")
+        except OSError as exc:
+            self.log.appendPlainText(f"Could not save {beside}: {exc}")
+        self._show_loaded(results, path, "")
+
+    def _show_loaded(self, results, path, saved):
         self.results = results
         self._stale = False
         self._loaded_from = path
         self._run_parameters = {}
         for r in sorted(results, key=lambda r: r.set_index):
-            self._run_parameters.setdefault(r.cell, []).append(r.params)
+            if "window_size" in r.params:
+                self._run_parameters.setdefault(r.cell, []).append(r.params)
         self._fill_table()
         n_cells = len({r.cell for r in results})
         when = f", saved {saved.replace('T', ' ')}" if saved else ""
@@ -492,6 +548,14 @@ class RunPanel(QWidget):
 
     def _open_output(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.output.text().strip()))
+
+
+def _beside(pkl_path, suffix):
+    """The file saved along with a results .pkl: 20261125_optimized_results.pkl
+    goes with 20261125_detection_results.json and 20261125_optimized_parameters.json."""
+    stem = (pkl_path[:-len(PKL_SUFFIX)] if pkl_path.endswith(PKL_SUFFIX)
+            else os.path.splitext(pkl_path)[0])
+    return stem + suffix
 
 
 def _guess(columns, candidates, default):

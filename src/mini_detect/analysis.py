@@ -72,6 +72,8 @@ def save_parameters(path: str, parameters: dict) -> None:
 
 
 def describe_param_set(p: dict) -> str:
+    if "window_size" not in p:  # results loaded from a file that did not say
+        return p["mode"]
     return f"{p['mode']} {p['window_size']}/{p['sample_step']}/{p['interval']}"
 
 
@@ -244,6 +246,145 @@ def save_legacy_results(path: str, results) -> None:
     ]
     with open(path, "wb") as f:
         pickle.dump(legacy, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+# -- results saved before the app wrote its own results file, or by the notebook
+
+class _PlainUnpickler(pickle.Unpickler):
+    """Reads lists, numbers, text and NumPy arrays, and refuses anything else, so
+    opening a .pkl file cannot run code that was hidden in it."""
+
+    _ALLOWED = {
+        "_reconstruct", "scalar", "ndarray", "dtype", "_frombuffer",
+        "float64", "float32", "int64", "int32", "bool_",
+    }
+
+    def find_class(self, module, name):
+        if module.split(".")[0] == "numpy" and name in self._ALLOWED:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"unexpected content ({module}.{name})")
+
+
+def read_legacy_results(path: str) -> list:
+    """The detections in a .pkl written by save_legacy_results or by the notebook:
+    [(sweep files, [(amplitudes, positions) for each sweep])], one per cell and
+    parameter set."""
+    not_results = ValueError("this .pkl file does not hold mini detection results")
+    try:
+        with open(path, "rb") as f:
+            raw = _PlainUnpickler(f).load()
+    except (pickle.UnpicklingError, EOFError, AttributeError, ImportError, IndexError):
+        raise not_results from None
+    entries = []
+    try:
+        for files, sweeps in raw:
+            files = [str(file) for file in files]
+            sweeps = [([float(v) for v in values], [int(i) for i in indices])
+                      for values, indices in sweeps]
+            if len(files) != len(sweeps):
+                raise not_results
+            if files:
+                entries.append((files, sweeps))
+    except (TypeError, ValueError):
+        raise not_results from None
+    if not entries:
+        raise not_results
+    return entries
+
+
+def _measure(path):
+    """What a sweep's results need besides its events: length, sampling rate and
+    (Rs, Rm, Cm, tau). Returns (those, None) or (None, the error)."""
+    try:
+        raw, header = det.read_mat(path)
+        fs = det.sampling_rate(header)
+        return (len(raw), fs, det.compute_rs_rm_cm(raw, header, fs)), None
+    except Exception as exc:
+        return None, exc
+
+
+def load_legacy_results(path, parameters=None, progress=None, cancelled=None, log=print):
+    """Rebuild full results from a .pkl that holds only the detected events.
+
+    The events are taken from the file as they are; detection is not run again.
+    Each recording is read once for its length, Rs, Rm and Cm, so the recordings
+    must still be where they were. `parameters` ({cell: [param set]}) says which
+    event type and settings each cell was detected with.
+
+    progress(done, total, cell_name) is called after each recording; cancelled()
+    is polled between them. Returns a list of CellResult, or None if cancelled.
+    """
+    entries = read_legacy_results(path)
+    parameters = parameters or {}
+
+    # One cell can have several entries, one per parameter set, in a row.
+    cells = []  # [(cell folder, [entry, ...])]
+    for entry in entries:
+        folder = os.path.dirname(entry[0][0])
+        if cells and cells[-1][0] == folder:
+            cells[-1][1].append(entry)
+        else:
+            cells.append((folder, [entry]))
+
+    def names(with_folder):
+        return [det.cell_name(os.path.dirname(folder), folder, with_folder)
+                for folder, _ in cells]
+
+    # Name the cells the way the parameters do.
+    with_folder = (sum(name in parameters for name in names(True))
+                   >= sum(name in parameters for name in names(False)))
+
+    files = list(dict.fromkeys(file for entry in entries for file in entry[0]))
+    owner = {file: name for name, (_, group) in zip(names(with_folder), cells)
+             for entry in group for file in entry[0]}
+    measured = {}
+    pool = ThreadPoolExecutor(max_workers=8)
+    try:
+        for done, (file, outcome) in enumerate(zip(files, pool.map(_measure, files)), 1):
+            if cancelled is not None and cancelled():
+                return None
+            measured[file] = outcome
+            if progress is not None:
+                progress(done, len(files), owner[file])
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    results = []
+    unknown = [name for name in names(with_folder) if not parameters.get(name)]
+    if unknown:
+        log("No saved parameters for these cells, so their event type was taken from "
+            f"the direction of their events: {', '.join(unknown)}")
+    for name, (folder, group) in zip(names(with_folder), cells):
+        sets = parameters.get(name, [])
+        if sets and len(sets) != len(group):
+            log(f"{name}: the parameters list {len(sets)} event type(s) but the file "
+                f"has {len(group)}; matched them in order")
+        session = os.path.basename(os.path.dirname(folder))
+        for i, (entry_files, entry_sweeps) in enumerate(group):
+            if i < len(sets):
+                params = sets[i]
+            else:  # not in the parameters: tell the event type from the events
+                amplitudes = [v for values, _ in entry_sweeps for v in values]
+                inward = not amplitudes or np.median(amplitudes) < 0
+                params = {"mode": "EPSC" if inward else "IPSC"}
+            sweeps, passive = [], []
+            for file, (values, indices) in zip(entry_files, entry_sweeps):
+                found, error = measured[file]
+                if found is not None:
+                    n_samples, fs, rc = found
+                    sweeps.append(SweepResult(file, values, indices, n_samples, fs))
+                    passive.append(rc)
+                elif values:
+                    raise ValueError(
+                        f"could not open the recording {file} ({error}). The recordings "
+                        "are read once, for their length, Rs, Rm and Cm. If they are on "
+                        "a drive that is not connected, connect it and try again")
+                else:  # it had no events, so leaving it out changes nothing
+                    sweeps.append(SweepResult(file, error=str(error)))
+                    passive.append(det._NAN4)
+            results.append(CellResult(name, params["mode"], i + 1, len(group), params,
+                                      sweeps, passive, session))
+    return results
 
 
 RESULTS_FORMAT = "mini_detect results"

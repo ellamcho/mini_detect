@@ -65,7 +65,9 @@ If `mini-detect` is not found, `python -m mini_detect` does the same thing.
    That name is what appears in parameter files, the metadata file and the
    exported files. If your cell folders already carry the full name (a folder
    called `EC123-1`), untick **Name cells folder-cell** at the top of the window
-   and each cell is named by its own folder alone. Each name can be used only
+   and each cell is named by its own folder alone. When you load a parameter
+   file whose names only fit the other setting, the app switches the box for
+   you and says so at the bottom of the window. Each name can be used only
    once, so with the box unticked, if two open folders have a cell folder with
    the same name, the folder added first keeps it and the app shows how many
    were left out.
@@ -131,9 +133,17 @@ is above the limit, or could not be measured, are left out of every file.
 **Coming back to earlier results.** Click **Load results…** and choose the
 `_detection_results.json` file from an earlier export (or the `.pkl` saved next
 to it). The table fills in straight away, and you can plot or export again
-without re-running detection or opening the data folders. A `.pkl` exported
-before this file existed cannot be loaded on its own; run detection once more
-and export to get one that can.
+without re-running detection or opening the data folders.
+
+A `.pkl` from an older version of the app, or from the notebook, has no
+`_detection_results.json` beside it and holds only the detected events. It loads
+too: the events are kept as they are, and each recording is read once for its
+length, Rs, Rm and Cm, so the recordings must be where they were (about a minute
+for 1500 sweeps on a network drive). The app then saves the
+`_detection_results.json` next to the `.pkl`, and from then on it loads straight
+away. Each cell's event type and settings come from the
+`_optimized_parameters.json` saved with the `.pkl`, or else from the parameters
+saved in the app.
 
 **4. Plot the results.** After detection (or after loading results), click **Plot results** to see every
 measurement (frequency, amplitude, Rs, Rm and Cm) with one dot per cell and a

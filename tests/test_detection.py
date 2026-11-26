@@ -1,6 +1,7 @@
 """Checks that the fast detection gives exactly what the original notebook's
 sample-by-sample scan gave, and that a folder of sweeps runs end to end."""
 import os
+import pickle
 
 import numpy as np
 import pytest
@@ -161,3 +162,72 @@ def test_results_round_trip(data_folder, tmp_path):
     with pytest.raises(ValueError):
         analysis.load_results(str(other))
 
+
+
+def test_results_pkl_without_a_results_file(session_folders, tmp_path):
+    """A .pkl from an older version, or from the notebook, holds only the events.
+    Loading it gives back the same results without detecting again."""
+    folders = [str(session_folders / "day1"), str(session_folders / "day2")]
+    parameters = {"day1-cellC": [analysis.make_param_set(60, 15, 5, "EPSC"),
+                                 analysis.make_param_set(60, 15, 5, "IPSC")],
+                  "day2-cellC": [analysis.make_param_set(100, 25, 15, "EPSC")],
+                  "day2-cellD": [analysis.make_param_set(60, 15, 5, "EPSC")]}
+    results = analysis.run_detection(folders, parameters, log=lambda _: None,
+                                     name_with_folder=True)
+    pkl = tmp_path / "old_optimized_results.pkl"
+    analysis.save_legacy_results(str(pkl), results)
+
+    def same(loaded):
+        assert len(loaded) == len(results) == 4
+        for before, after in zip(results, loaded):
+            assert (after.cell, after.mode, after.set_index, after.n_sets, after.session) == (
+                before.cell, before.mode, before.set_index, before.n_sets, before.session)
+            assert after.params == before.params
+            assert after.amplitudes == before.amplitudes
+            assert after.intervals_ms() == before.intervals_ms()
+            for name in ("n_events", "frequency_hz", "mean_amplitude", "mean_rs",
+                         "mean_rm", "mean_cm"):
+                assert getattr(after, name) == pytest.approx(getattr(before, name),
+                                                             nan_ok=True), name
+
+    seen = []
+    same(analysis.load_legacy_results(str(pkl), parameters, log=lambda _: None,
+                                      progress=lambda *args: seen.append(args)))
+    assert [done for done, _, _ in seen] == [1, 2, 3] and seen[0][1] == 3
+
+    # The notebook kept the events as NumPy arrays.
+    as_arrays = [(files, [(np.array(values), np.array(indices)) for values, indices in sweeps])
+                 for files, sweeps in pickle.loads(pkl.read_bytes())]
+    notebook = tmp_path / "optimized_results.pkl"
+    notebook.write_bytes(pickle.dumps(as_arrays, protocol=pickle.HIGHEST_PROTOCOL))
+    same(analysis.load_legacy_results(str(notebook), parameters, log=lambda _: None))
+
+    # Cells are named the way the parameters name them, here by their own folder.
+    own = {"cellC": parameters["day1-cellC"], "cellD": parameters["day2-cellD"]}
+    loaded = analysis.load_legacy_results(str(pkl), own, log=lambda _: None)
+    assert [r.cell for r in loaded] == ["cellC", "cellC", "cellC", "cellD"]
+
+    # Without parameters the event type comes from the direction of the events.
+    entries = pickle.loads(pkl.read_bytes())
+    entries[1] = (entries[1][0], [([12.5, 20.0], [5000, 9000])])  # outward events
+    bare = tmp_path / "bare.pkl"
+    bare.write_bytes(pickle.dumps(entries))
+    log = []
+    loaded = analysis.load_legacy_results(str(bare), log=log.append)
+    assert [(r.cell, r.mode) for r in loaded] == [
+        ("day1-cellC", "EPSC"), ("day1-cellC", "IPSC"), ("day2-cellC", "EPSC"),
+        ("day2-cellD", "EPSC")]
+    assert loaded[0].params == {"mode": "EPSC"} and "day2-cellD" in log[0]
+    assert loaded[0].frequency_hz == pytest.approx(results[0].frequency_hz)
+
+    # The events are only useful with their recordings; say so if they are gone.
+    os.rename(session_folders / "day2", session_folders / "moved")
+    with pytest.raises(ValueError, match="could not open the recording"):
+        analysis.load_legacy_results(str(pkl), parameters, log=lambda _: None)
+
+    # Anything else in a .pkl is refused, and nothing in it is run.
+    for content in ({"a": 1}, [1, 2, 3], os.getcwd, analysis.SweepResult("x")):
+        other = tmp_path / "other.pkl"
+        other.write_bytes(pickle.dumps(content))
+        with pytest.raises(ValueError, match="does not hold"):
+            analysis.load_legacy_results(str(other))

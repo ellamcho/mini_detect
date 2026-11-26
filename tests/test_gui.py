@@ -19,6 +19,9 @@ from PySide6.QtCore import QEventLoop, QMimeData, QPointF, QSettings, Qt, QUrl  
 from PySide6.QtGui import QDropEvent  # noqa: E402
 from PySide6.QtWidgets import QWidget  # noqa: E402
 
+from mini_detect import analysis  # noqa: E402
+from mini_detect.gui import app as app_module  # noqa: E402
+from mini_detect.gui import run as run_module  # noqa: E402
 from mini_detect.gui import state  # noqa: E402
 from mini_detect.gui.app import MainWindow, create_app  # noqa: E402
 
@@ -262,6 +265,76 @@ def test_saved_state_from_before_folder_names(app, session_folders):
     wait_for(app, lambda: len(window.session.cells) == 2)
     assert not window.name_check.isChecked()
     assert sorted(window.session.parameters) == ["cellC", "cellD"]
+    window.close()
+
+
+def test_files_from_an_older_version_load(app, session_folders, tmp_path, monkeypatch):
+    """Parameters whose cell names need the other naming, and a results .pkl
+    with no results file beside it, both load."""
+    names = ["day1-cellC", "day2-cellC", "day2-cellD"]
+    parameters = {name: [analysis.make_param_set(60, 15, 5, "EPSC")] for name in names}
+    window = MainWindow()
+    window.show()
+    window.add_folders([str(session_folders)])
+    wait_for(app, lambda: len(window.session.cells) == 3)
+    results = analysis.detect_cells(window.session.cells, parameters, log=lambda _: None)
+    old = tmp_path / "old"
+    old.mkdir()
+    analysis.save_parameters(str(old / "old_optimized_parameters.json"), parameters)
+    analysis.save_legacy_results(str(old / "old_optimized_results.pkl"), results)
+
+    # With the naming off the cells are cellC and cellD, which the file does not
+    # know. Loading it turns the naming back on instead of matching nothing.
+    window.name_check.setChecked(False)
+    wait_for(app, lambda: len(window.session.cells) == 2)
+    monkeypatch.setattr(app_module.QFileDialog, "getOpenFileName", staticmethod(
+        lambda *args, **kwargs: (str(old / "old_optimized_parameters.json"), "")))
+    window.load_btn.click()
+    wait_for(app, lambda: len(window.session.cells) == 3)
+    assert window.name_check.isChecked() and window.session.n_tuned() == 3
+    assert "turned on" in window.statusBar().currentMessage()
+    window.close()
+
+    # The same when the app starts with saved names that need the other naming.
+    autosave = state.Session._autosave_path(None)
+    with open(autosave) as f:
+        saved = json.load(f)
+    assert saved["name_with_folder"] and sorted(saved["parameters"]) == names
+    saved["name_with_folder"] = False
+    with open(autosave, "w") as f:
+        json.dump(saved, f)
+    window = MainWindow()
+    wait_for(app, lambda: window.session.n_tuned() == 3)
+    assert window.name_check.isChecked()
+    assert [c.name for c in window.session.cells] == names
+
+    # The .pkl holds only the events. The recordings are read once for the rest,
+    # and a results file is saved beside it for next time.
+    run = window.run
+    run.rs_enabled.setChecked(False)
+    run.load_results(str(old / "old_optimized_results.pkl"))
+    assert run._job is not None and not run.load.isEnabled()
+    wait_for(app, lambda: run.results is not None and run._job is None)
+    assert [r.cell for r in run.results] == names
+    for before, after in zip(results, run.results):
+        assert after.amplitudes == before.amplitudes and after.params == before.params
+        assert after.frequency_hz == pytest.approx(before.frequency_hz)
+        assert after.mean_rs == pytest.approx(before.mean_rs, nan_ok=True)
+    assert run.table.rowCount() == 3 and run.plot.isEnabled()
+    assert "loaded from old_optimized_results.pkl" in run.note.text()
+    assert (old / "old_detection_results.json").is_file()
+    run.load_results(str(old / "old_optimized_results.pkl"))
+    assert run._job is None and "loaded from old_detection_results.json" in run.note.text()
+
+    # A .pkl of something else is refused with an explanation.
+    shown = []
+    monkeypatch.setattr(run_module.QMessageBox, "warning",
+                        staticmethod(lambda parent, title, text: shown.append(text)))
+    (old / "other.pkl").write_bytes(b"not a pickle")
+    run.load_results(str(old / "other.pkl"))
+    wait_for(app, lambda: run._job is None and shown)
+    assert "does not hold mini detection results" in shown[0]
+    assert [r.cell for r in run.results] == names  # what was loaded stays
     window.close()
 
 
