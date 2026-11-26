@@ -11,6 +11,7 @@ import pickle
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -243,6 +244,54 @@ def save_legacy_results(path: str, results) -> None:
     ]
     with open(path, "wb") as f:
         pickle.dump(legacy, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+RESULTS_FORMAT = "mini_detect results"
+
+
+def save_results(path: str, results) -> None:
+    """Save everything about a detection run to one JSON file, so it can be
+    loaded again later without re-reading the recordings."""
+    data = {
+        "format": RESULTS_FORMAT,
+        "version": 1,
+        "saved": datetime.now().isoformat(timespec="seconds"),
+        "cells": [{
+            "cell": r.cell,
+            "mode": r.mode,
+            "set_index": r.set_index,
+            "n_sets": r.n_sets,
+            "params": r.params,
+            "session": r.session,
+            "passive": [[float(v) for v in values] for values in r.passive],
+            "sweeps": [{
+                "path": s.path,
+                "values": [float(v) for v in s.values],
+                "indices": [int(i) for i in s.indices],
+                "n_samples": int(s.n_samples),
+                "fs": float(s.fs),
+                "error": s.error,
+            } for s in r.sweeps],
+        } for r in results],
+    }
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+def load_results(path: str):
+    """Read a file written by save_results. Returns (results, when it was saved)."""
+    with open(path, "r") as f:
+        data = json.load(f)
+    if not isinstance(data, dict) or data.get("format") != RESULTS_FORMAT:
+        raise ValueError("this is not a results file saved by Mini Detect")
+    results = []
+    for c in data["cells"]:
+        passive = [tuple(values) for values in c["passive"]]
+        sweeps = [SweepResult(s["path"], s["values"], s["indices"], s["n_samples"],
+                              s["fs"], s.get("error")) for s in c["sweeps"]]
+        results.append(CellResult(c["cell"], c["mode"], c["set_index"], c["n_sets"],
+                                  c["params"], sweeps, passive, c.get("session", "")))
+    return results, data.get("saved", "")
 
 
 # ---------------------------------------------------------------------- export

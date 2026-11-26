@@ -11,11 +11,13 @@ import time
 
 import pandas as pd
 import pytest
+import shiboken6
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QMimeData, QPointF, QSettings, Qt, QUrl  # noqa: E402
 from PySide6.QtGui import QDropEvent  # noqa: E402
+from PySide6.QtWidgets import QWidget  # noqa: E402
 
 from mini_detect.gui import state  # noqa: E402
 from mini_detect.gui.app import MainWindow, create_app  # noqa: E402
@@ -130,6 +132,26 @@ def test_whole_workflow(app, data_folder, tmp_path):
     reopened = MainWindow()
     wait_for(app, lambda: len(reopened.session.cells) == 2)
     assert reopened.session.n_tuned() == 2
+
+    # Saved results can be loaded instead of running detection again, from the
+    # results file or from the .pkl saved beside it.
+    run = reopened.run
+    assert run.results is None and not run.plot.isEnabled()
+    run.load_results(str(out / "test_optimized_results.pkl"))
+    assert [r.cell for r in run.results] == [cell_a, cell_b]
+    assert run.table.rowCount() == 2 and int(run.table.item(0, 4).text()) >= 15
+    assert run.plot.isEnabled() and run.export.isEnabled()
+    assert "loaded from test_detection_results.json" in run.note.text()
+    # They stay when a parameter is changed, and export the same files again.
+    reopened.session.save_set(cell_a, reopened.session.parameters[cell_a][0])
+    assert run.export.isEnabled()
+    run.output.setText(str(tmp_path / "out_again"))
+    run.tag.setText("test")
+    run.rs_enabled.setChecked(False)
+    run.export.click()
+    for name in ("Frequency_combined_test.csv", "control_Amplitude_test.csv",
+                 "test_optimized_parameters.json"):
+        assert (tmp_path / "out_again" / name).read_text() == (out / name).read_text(), name
     reopened.close()
 
 
@@ -265,3 +287,69 @@ def test_background_results_always_arrive(app):
         while i not in receiver.got and time.time() < deadline:
             app.processEvents(QEventLoop.AllEvents, 50)
         assert i in receiver.got, f"the result of job {i} never arrived"
+
+
+def test_garbage_collector_is_paused_while_a_job_runs(app):
+    """Python's garbage collector must not run on a background thread, where it
+    could destroy window objects and crash Qt. Jobs pause it until they report back."""
+    import gc
+
+    from PySide6.QtCore import QObject
+
+    class Receiver(QObject):
+        def __init__(self):
+            super().__init__()
+            self.seen = []
+
+        def on_done(self, _token, result):
+            self.seen.append(result)
+
+    def pump_until(condition):
+        deadline = time.time() + 10
+        while not condition() and time.time() < deadline:
+            app.processEvents(QEventLoop.AllEvents, 50)
+
+    receiver = Receiver()
+    pump_until(gc.isenabled)   # jobs left over from earlier tests finish first
+    assert gc.isenabled()
+    first = state.Job(receiver, lambda job: gc.isenabled())
+    second = state.Job(receiver, lambda job: gc.isenabled())
+    for job in (first, second):
+        job.done.connect(receiver.on_done)
+        job.start()
+    assert not gc.isenabled()
+    pump_until(lambda: len(receiver.seen) == 2)
+    assert receiver.seen == [False, False]   # it was off inside both jobs
+    pump_until(gc.isenabled)
+    assert gc.isenabled()                     # and is back on once both are done
+
+
+def test_before_and_after_plots(app, tmp_path):
+    from test_plots import PAIRED
+
+    from mini_detect.gui.plot_window import PlotWindow
+
+    # As in the app, the plot window belongs to another window. One left on its
+    # own is destroyed in the wrong order when Python exits.
+    host = QWidget()
+    window = PlotWindow(PAIRED, None, "tag", str(tmp_path), parent=host)
+    window.show()
+    window.by.setCurrentIndex(window.by.findData("pair"))
+    assert [window.which.itemText(i) for i in range(window.which.count())] == [
+        "EPSC, before and after picro  (n = 3 pairs)",
+        "EPSC, before and after wash  (n = 1 pair)"]
+    assert "Hz p = 0.0198 (*)" in window.info.text()
+    snapshot(app, window, "pairs")
+    window.save_btn.click()
+    saved = sorted(os.listdir(tmp_path / "plots"))
+    assert "tag_paired_picro_EPSC.pdf" in saved and "tag_paired_t_tests.csv" in saved
+    window.close()
+
+    # Nothing recorded twice: the window says so instead of showing a figure.
+    window = PlotWindow([r for r in PAIRED if "_" not in r.cell], None, "tag", str(tmp_path),
+                        parent=host)
+    window.by.setCurrentIndex(window.by.findData("pair"))
+    assert window.which.count() == 0 and not window.save_btn.isEnabled()
+    window.close()
+    shiboken6.delete(host)   # destroys the host and both plot windows now
+
