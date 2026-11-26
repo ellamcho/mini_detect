@@ -172,11 +172,13 @@ class MainWindow(QMainWindow):
         self._refresh_summary()
         if restoring:
             self.session.finish_restore()
+            switched = self.session.match_naming()
             self._sync_naming()
             if self.session.parameters:
                 self._show_status(
                     f"Restored your {_plural(len(self.session.folders), 'session folder')} "
-                    f"and the saved parameters for {len(self.session.parameters)} cells.")
+                    f"and the saved parameters for {len(self.session.parameters)} cells."
+                    + (f" {self._naming_note()}" if switched else ""))
             return
         if empty:
             QMessageBox.information(
@@ -186,9 +188,13 @@ class MainWindow(QMainWindow):
                 "per cell, or a folder that holds several session folders.")
         if not found:
             return
+        switched = self.session.match_naming()
+        self._sync_naming()
         message = (f"Added {_plural(len(added), 'session folder')} with "
                    f"{_plural(len(self.session.cells) - before, 'cell')}."
                    if added else "Those folders are already open; refreshed them.")
+        if switched:
+            message += f" {self._naming_note()}"
         left_out = sum(len(self.session.skipped.get(folder, [])) for folder, _ in found)
         if left_out:
             message += (f" {_plural(left_out, 'cell')} left out because another open "
@@ -212,6 +218,11 @@ class MainWindow(QMainWindow):
         self.name_check.blockSignals(True)
         self.name_check.setChecked(self.session.name_with_folder)
         self.name_check.blockSignals(False)
+
+    def _naming_note(self):
+        return ("\"Name cells folder-cell\" was turned "
+                f"{'on' if self.session.name_with_folder else 'off'} to match the "
+                "names in the saved parameters.")
 
     def _naming_toggled(self, on):
         self.session.set_name_with_folder(on)
@@ -387,22 +398,20 @@ class MainWindow(QMainWindow):
             merge = box.clickedButton() is add
         self.session.replace_parameters(parameters, merge=merge)
         QSettings().setValue("parameter_dir", os.path.dirname(path))
+        # A file names its cells one way or the other; follow it.
+        switched = self.session.match_naming(parameters)
+        self._sync_naming()
         names = {cell.name for cell in self.session.cells}
         here = sum(1 for cell in parameters if cell in names)
         self._show_status(f"Loaded parameters for {len(parameters)} cells "
-                          f"({here} of them are in the open folders).")
+                          f"({here} of them are in the open folders)."
+                          + (f" {self._naming_note()}" if switched else ""))
         if not here and self.session.cells:
-            other_way = not self.session.name_with_folder
-            other_names = {det.cell_name(cell.folder, cell.path, other_way)
-                           for cell in self.session.cells}
-            if other_names.intersection(parameters):
-                QMessageBox.information(
-                    self, "Load parameters",
-                    "None of the cell names in this file match the open cells, but "
-                    "they would if \"Name cells folder-cell\" were turned "
-                    f"{'on' if other_way else 'off'}.\n\nThe file names cells like "
-                    f"{next(iter(parameters))}; the open cells are named like "
-                    f"{self.session.cells[0].name}.")
+            QMessageBox.information(
+                self, "Load parameters",
+                "None of the cell names in this file match the open cells.\n\n"
+                f"The file names cells like {next(iter(parameters))}; the open cells "
+                f"are named like {self.session.cells[0].name}.")
 
     def _save_parameters(self):
         from datetime import date

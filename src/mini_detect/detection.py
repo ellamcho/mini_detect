@@ -245,10 +245,15 @@ class Sweep:
         return len(self.raw) / self.fs
 
 
+def sampling_rate(header: str) -> float:
+    """Samples per second, from the file's header (10 kHz if it is not there)."""
+    rate = _RATE_PATTERN.search(header)
+    return float(rate.group(1)) if rate and float(rate.group(1)) > 0 else DEFAULT_FS
+
+
 def load_sweep(path: str) -> Sweep:
     raw, header = read_mat(path)
-    rate = _RATE_PATTERN.search(header)
-    fs = float(rate.group(1)) if rate and float(rate.group(1)) > 0 else DEFAULT_FS
+    fs = sampling_rate(header)
     filtered = bandpass_filter(raw, BANDPASS_HZ[0], BANDPASS_HZ[1], fs, order=2)
     noise = filtered - median_filter(filtered, size=BASELINE_WINDOW)
     return Sweep(

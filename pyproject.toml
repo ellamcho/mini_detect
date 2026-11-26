@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mini-detect"
-version = "0.4.0"
+version = "0.4.1"
 description = "Desktop app for tuning, detecting and exporting miniature synaptic currents (mEPSCs / mIPSCs) from ScanImage .mat sweeps"
 readme = "README.md"
 requires-python = ">=3.10"

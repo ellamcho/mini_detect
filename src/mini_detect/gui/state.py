@@ -160,6 +160,21 @@ class Session(QObject):
         self.cells_changed.emit()
         self.parameters_changed.emit()
 
+    def match_naming(self, names=None) -> bool:
+        """Cell names in saved parameters only mean something under the naming
+        they were saved with. If none of `names` (default: every cell with saved
+        parameters) is an open cell, but some would be under the other naming,
+        switch to that naming. Returns whether it switched."""
+        names = set(self.parameters if names is None else names)
+        if not names or names.intersection(cell.name for cell in self.cells):
+            return False
+        other = not self.name_with_folder
+        if not names.intersection(det.cell_name(cell.folder, cell.path, other)
+                                  for cell in self.cells):
+            return False
+        self.set_name_with_folder(other)
+        return True
+
     def add_sessions(self, found, missing=()) -> list:
         """Add scanned session folders, as [(folder, cells)]; a folder that is
         already open is refreshed. Returns the folders that are new."""
