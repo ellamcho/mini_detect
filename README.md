@@ -122,12 +122,20 @@ count, frequency, mean amplitude, series resistance (Rs), membrane resistance
 | `<condition>_IPI_by_cell_<tag>.csv` | Every inter-event interval (ms), one column per cell |
 | `<condition>_ampls_by_cell_<tag>.csv` | Every event amplitude (pA), one column per cell |
 | `<tag>_optimized_parameters.json` | The parameters used for each cell |
+| `<tag>_detection_results.json` | Everything from the run, for **Load results…** |
 | `<tag>_optimized_results.pkl` | Raw detections, in the format the notebooks read |
 
 With "Leave out cells with Rs above" ticked, cells whose mean series resistance
 is above the limit, or could not be measured, are left out of every file.
 
-**4. Plot the results.** After detection, click **Plot results** to see every
+**Coming back to earlier results.** Click **Load results…** and choose the
+`_detection_results.json` file from an earlier export (or the `.pkl` saved next
+to it). The table fills in straight away, and you can plot or export again
+without re-running detection or opening the data folders. A `.pkl` exported
+before this file existed cannot be loaded on its own; run detection once more
+and export to get one that can.
+
+**4. Plot the results.** After detection (or after loading results), click **Plot results** to see every
 measurement (frequency, amplitude, Rs, Rm and Cm) with one dot per cell and a
 black bar at the mean, conditions side by side. Choose how to split the cells:
 
@@ -137,8 +145,18 @@ black bar at the mean, conditions side by side. Choose how to split the cells:
   recorded that day. Every figure uses the same axis ranges so days can be
   compared.
 
+- **Before and after** is for cells recorded twice. A cell whose name is another
+  cell's name plus an underscore and a label is treated as the second recording
+  of that cell, and the label as the treatment: `20261117-2` and
+  `20261117-2_picro` are one cell before and after picro. Each treatment gets a
+  figure with a line joining each cell's two recordings and the result of a
+  two-sided paired t test above (`ns` for p ≥ 0.05, `*` < 0.05, `**` < 0.01,
+  `***` < 0.001, `****` < 0.0001). The exact p values are shown above the
+  figure, and saving also writes them to `<tag>_paired_t_tests.csv`.
+
 The plots use the metadata file and the Rs limit chosen on the tab; without a
-metadata file all cells form one group. **Save all as PDF and PNG** writes every
+metadata file all cells form one group. A pair is only used when both of its
+recordings pass the Rs limit. **Save all as PDF and PNG** writes every
 figure in the list to a `plots` folder inside the output folder. Text in the PDF
 stays editable in Illustrator.
 

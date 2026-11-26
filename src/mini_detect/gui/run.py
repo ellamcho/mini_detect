@@ -19,6 +19,8 @@ from .state import Job
 
 COLUMNS = ["Cell", "Event type", "Parameters", "Sweeps", "Events", "Frequency (Hz)",
            "Amplitude (pA)", "Rs (MΩ)", "Rm (MΩ)", "Cm (pF)"]
+RESULTS_SUFFIX = "_detection_results.json"
+PKL_SUFFIX = "_optimized_results.pkl"
 EXPORT_LABELS = [
     ("summary", "Mean amplitude and frequency per cell"),
     ("passive", "Rs, Rm and Cm per cell"),
@@ -37,6 +39,8 @@ class RunPanel(QWidget):
         self.session = session
         self.results = None
         self._stale = False
+        self._loaded_from = ""   # the file the results came from, if they were loaded
+        self._run_parameters = {}
         self._job = None
         self._metadata = None
         self._build()
@@ -125,6 +129,12 @@ class RunPanel(QWidget):
 
         row = QHBoxLayout()
         self.run = QPushButton("Run detection")
+        self.load = QPushButton("Load results\u2026")
+        self.load.setToolTip(
+            "Bring back the results of an earlier detection run, so you can plot or "
+            "export them again without re-running detection. Choose the "
+            "_detection_results.json file (or the .pkl saved next to it) that "
+            "Export CSV files wrote.")
         self.cancel = QPushButton("Cancel")
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
@@ -136,6 +146,7 @@ class RunPanel(QWidget):
             "above, and can save the figures as PDF and PNG.")
         self.open_folder = QPushButton("Open output folder")
         row.addWidget(self.run)
+        row.addWidget(self.load)
         row.addWidget(self.cancel)
         row.addWidget(self.progress, 1)
         row.addWidget(self.export)
@@ -166,6 +177,7 @@ class RunPanel(QWidget):
         self.cancel.clicked.connect(self._cancel)
         self.export.clicked.connect(self._export)
         self.plot.clicked.connect(self._plot)
+        self.load.clicked.connect(self._choose_results)
         self.open_folder.clicked.connect(self._open_output)
         self.output.textChanged.connect(self._refresh_buttons)
         self.cell_column.currentIndexChanged.connect(self._update_match)
@@ -262,14 +274,15 @@ class RunPanel(QWidget):
     # --------------------------------------------------------------- detection
 
     def _folder_changed(self):
-        self.results = None
-        self._stale = False
-        self.table.setRowCount(0)
+        if not self._loaded_from:  # loaded results do not depend on the open folders
+            self.results = None
+            self._stale = False
+            self.table.setRowCount(0)
         self._update_match()
         self._refresh_buttons()
 
     def _parameters_changed(self):
-        if self.results is not None:
+        if self.results is not None and not self._loaded_from:
             self._stale = True
         self._refresh_buttons()
 
@@ -277,6 +290,7 @@ class RunPanel(QWidget):
         running = self._job is not None
         tuned = self.session.n_tuned()
         self.run.setEnabled(not running and tuned > 0)
+        self.load.setEnabled(not running)
         self.cancel.setVisible(running)
         self.progress.setVisible(running)
         ready = self.results is not None and not self._stale and not running
@@ -285,8 +299,12 @@ class RunPanel(QWidget):
         self.open_folder.setEnabled(os.path.isdir(self.output.text().strip()))
         if running:
             return
-        if not self.session.cells:
-            self.note.setText("Add a session folder first.")
+        if self.results is not None and self._loaded_from:
+            self.note.setText(
+                f"Showing results loaded from {os.path.basename(self._loaded_from)}."
+                + ("" if self.output.text().strip() else "  Choose an output folder to export."))
+        elif not self.session.cells:
+            self.note.setText("Add a session folder first, or load saved results.")
         elif tuned == 0:
             self.note.setText("No cell has saved parameters yet. Save some on the Tune tab.")
         elif self.results is None:
@@ -344,6 +362,7 @@ class RunPanel(QWidget):
             self.log.appendPlainText("Detection cancelled.")
         else:
             self.results = results
+            self._loaded_from = ""
             self._fill_table()
             n_events = sum(r.n_events for r in results)
             n_cells = len({r.cell for r in results})
@@ -391,6 +410,8 @@ class RunPanel(QWidget):
                  lambda p: analysis.save_parameters(p, self._run_parameters)),
                 (f"{tag}_optimized_results.pkl",
                  lambda p: analysis.save_legacy_results(p, self.results)),
+                (f"{tag}{RESULTS_SUFFIX}",
+                 lambda p: analysis.save_results(p, self.results)),
             ):
                 save(os.path.join(output, name))
                 written.append(os.path.join(output, name))
@@ -401,6 +422,51 @@ class RunPanel(QWidget):
             return
         self.remember()
         self.status.emit(f"Wrote {len(written)} files to {output}")
+        self._refresh_buttons()
+
+    # ----------------------------------------------------------- saved results
+
+    def _choose_results(self):
+        start = self.output.text().strip() or self.session.start_dir
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load results", start,
+            f"Saved results (*{RESULTS_SUFFIX} *.pkl);;All files (*)")
+        if path:
+            self.load_results(path)
+
+    def load_results(self, path):
+        """Show results saved by an earlier export instead of running detection."""
+        if path.lower().endswith((".pkl", ".pickle")):
+            # The .pkl holds only the raw detections, for the notebooks. The file
+            # saved beside it has everything.
+            beside = path[:-len(PKL_SUFFIX)] + RESULTS_SUFFIX
+            if path.endswith(PKL_SUFFIX) and os.path.isfile(beside):
+                path = beside
+            else:
+                QMessageBox.information(
+                    self, "Load results",
+                    "This .pkl file was saved by an earlier version and does not hold "
+                    "everything that is needed (recording lengths, Rs, Rm and Cm).\n\n"
+                    "Run detection once more and click Export CSV files. That saves a "
+                    f"file ending in {RESULTS_SUFFIX} next to the .pkl, and from then "
+                    "on either file can be loaded here straight away.")
+                return
+        try:
+            results, saved = analysis.load_results(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Load results", f"Could not read this file:\n{exc}")
+            return
+        self.results = results
+        self._stale = False
+        self._loaded_from = path
+        self._run_parameters = {}
+        for r in sorted(results, key=lambda r: r.set_index):
+            self._run_parameters.setdefault(r.cell, []).append(r.params)
+        self._fill_table()
+        n_cells = len({r.cell for r in results})
+        when = f", saved {saved.replace('T', ' ')}" if saved else ""
+        self.log.appendPlainText(f"Loaded results for {n_cells} cells from {path}{when}")
+        self.status.emit(f"Loaded results for {n_cells} cells")
         self._refresh_buttons()
 
     def _plot(self):

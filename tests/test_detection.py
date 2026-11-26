@@ -128,3 +128,36 @@ def test_several_session_folders(session_folders):
     assert [r.cell for r in results] == ["cellC", "cellD"]
     assert os.path.dirname(os.path.dirname(results[0].sweeps[0].path)) == day1
     assert any("Left out of day2" in line and "cellC" in line for line in log)
+
+
+def test_results_round_trip(data_folder, tmp_path):
+    parameters = {"cellA": [analysis.make_param_set(60, 15, 5, "EPSC"),
+                            analysis.make_param_set(60, 15, 5, "IPSC")],
+                  "cellB": [analysis.make_param_set(100, 25, 15, "EPSC")]}
+    results = analysis.run_detection(str(data_folder), parameters, log=lambda _: None)
+    path = tmp_path / "saved_detection_results.json"
+    analysis.save_results(str(path), results)
+    loaded, saved = analysis.load_results(str(path))
+    assert saved
+    assert len(loaded) == len(results) == 3
+    for before, after in zip(results, loaded):
+        assert (after.cell, after.mode, after.set_index, after.n_sets, after.session) == (
+            before.cell, before.mode, before.set_index, before.n_sets, before.session)
+        assert after.params == before.params
+        assert after.amplitudes == before.amplitudes
+        assert after.intervals_ms() == before.intervals_ms()
+        for name in ("n_events", "frequency_hz", "mean_amplitude", "mean_rs", "mean_rm",
+                     "mean_cm"):
+            assert getattr(after, name) == pytest.approx(getattr(before, name), nan_ok=True)
+
+    # Exports made from loaded results are the same as from the original run.
+    for folder, source in (("a", results), ("b", loaded)):
+        analysis.export_results(source, str(tmp_path / folder), "t", log=lambda _: None)
+    for name in sorted(os.listdir(tmp_path / "a")):
+        assert (tmp_path / "a" / name).read_text() == (tmp_path / "b" / name).read_text(), name
+
+    other = tmp_path / "other.json"
+    other.write_text("{}")
+    with pytest.raises(ValueError):
+        analysis.load_results(str(other))
+

@@ -2,6 +2,7 @@
 plus a small helper for running slow work off the UI thread."""
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
@@ -12,6 +13,40 @@ from PySide6.QtCore import QObject, QStandardPaths, Signal
 
 from .. import analysis
 from .. import detection as det
+
+
+class _CollectorPause(QObject):
+    """Keeps Python's cyclic garbage collector off while background jobs run.
+
+    The collector runs in whichever thread happens to allocate memory. If that is
+    a background thread, it can free window objects there, and Qt objects must
+    only be destroyed on the UI thread: doing it elsewhere crashes the app now
+    and then. Background threads only exist while a job runs, so pausing the
+    collector for that time leaves all collection to the UI thread.
+    """
+
+    job_finished = Signal()   # emitted by a job's thread as its last act
+
+    def __init__(self):
+        super().__init__()
+        self._running = 0
+        self._was_enabled = True
+        # Emitted from another thread, so this runs later, on the UI thread.
+        self.job_finished.connect(self._end)
+
+    def begin(self):   # on the UI thread, before the job's thread starts
+        if self._running == 0:
+            self._was_enabled = gc.isenabled()
+            gc.disable()
+        self._running += 1
+
+    def _end(self):
+        self._running = max(self._running - 1, 0)
+        if self._running == 0 and self._was_enabled:
+            gc.enable()
+
+
+_collector = _CollectorPause()
 
 
 class Job(QObject):
@@ -29,6 +64,7 @@ class Job(QObject):
         self._cancel = threading.Event()
 
     def start(self):
+        _collector.begin()
         threading.Thread(target=self._run, daemon=True).start()
 
     def cancel(self):
@@ -51,6 +87,7 @@ class Job(QObject):
             self.deleteLater()
         except RuntimeError:
             pass
+        _collector.job_finished.emit()
 
     @staticmethod
     def _emit(signal, *args):

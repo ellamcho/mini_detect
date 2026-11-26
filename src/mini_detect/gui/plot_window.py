@@ -24,6 +24,10 @@ class PlotWindow(QDialog):
         self.tag = tag
         self.output_dir = output_dir
         self.limits = plots.axis_limits(results)
+        paired = [r for pairs in plots.find_pairs(results).values() for pair in pairs
+                  for r in pair]
+        self.pair_limits = plots.axis_limits(paired, headroom=0.25)
+        self.note = note
         self.specs = []
         self.saved_to = ""
 
@@ -33,8 +37,14 @@ class PlotWindow(QDialog):
         self.by = QComboBox()
         self.by.addItem("By condition  (all days together)", plots.BY_CONDITION)
         self.by.addItem("By day  (conditions compared within each day)", plots.BY_DAY)
-        self.by.setToolTip("A day is one session folder. By day gives one figure per "
-                           "session folder, comparing the conditions recorded in it.")
+        self.by.addItem("Before and after  (cells recorded twice, paired t test)",
+                        plots.BY_PAIR)
+        self.by.setToolTip(
+            "A day is one session folder. By day gives one figure per session folder, "
+            "comparing the conditions recorded in it.\n\n"
+            "Before and after pairs a cell with a second recording of it: a cell whose "
+            "name is another cell's name plus an underscore and a label, such as "
+            "20261117-2 and 20261117-2_picro. Each treatment gets a figure.")
         row.addWidget(self.by)
         row.addSpacing(16)
         row.addWidget(QLabel("Figure"))
@@ -51,8 +61,7 @@ class PlotWindow(QDialog):
         row.addWidget(self.open_btn)
         layout.addLayout(row)
 
-        self.info = QLabel(
-            "One dot per cell; the black bar is the mean. " + note)
+        self.info = QLabel("")
         self.info.setWordWrap(True)
         layout.addWidget(self.info)
 
@@ -72,8 +81,20 @@ class PlotWindow(QDialog):
         screen = self.screen().availableGeometry().width() if self.screen() else 1500
         self.resize(min(int(width * 100) + 60, screen - 80), int(height * 100) + 150)
 
+    def _limits(self):
+        return self.pair_limits if self.by.currentData() == plots.BY_PAIR else self.limits
+
     def _rebuild(self):
         self.specs = plots.build_figures(self.results, self.conditions, self.by.currentData())
+        self.save_btn.setEnabled(bool(self.specs))
+        if not self.specs:
+            message = QLabel(
+                "No cells were recorded twice.\n\nA pair is two cells where one is named "
+                "after the other with an underscore and a label added,\nfor example "
+                "20261117-2 and 20261117-2_picro.")
+            message.setAlignment(Qt.AlignCenter)
+            self.scroll.setWidget(message)
+            self.info.setText(self.note)
         self.which.blockSignals(True)
         self.which.clear()
         self.which.addItems([spec.title for spec in self.specs])
@@ -83,7 +104,16 @@ class PlotWindow(QDialog):
     def _show(self, index):
         if not 0 <= index < len(self.specs):
             return
-        figure = plots.make_figure(self.specs[index], self.limits)
+        spec = self.specs[index]
+        if spec.pairs:
+            tests = [f"{row['Measurement'].split(' (')[0]} {_p_text(row['p'])}"
+                     for row in plots.paired_stats(spec) if row["N_Pairs"] >= 2]
+            text = ("Each line joins one cell before and after. Paired t test:  "
+                    + ("   \u00b7   ".join(tests) if tests else "needs at least two pairs."))
+        else:
+            text = "One dot per cell; the black bar is the mean."
+        self.info.setText(f"{text}  {self.note}".strip())
+        figure = plots.make_figure(spec, self._limits())
         canvas = FigureCanvasQTAgg(figure)
         width, height = figure.get_size_inches()
         canvas.setFixedSize(int(width * figure.dpi), int(height * figure.dpi))
@@ -96,10 +126,21 @@ class PlotWindow(QDialog):
             if not folder:
                 return
         try:
-            written = plots.save_figures(self.specs, self.limits, folder, self.tag)
+            written = plots.save_figures(self.specs, self._limits(), folder, self.tag)
+            if self.by.currentData() == plots.BY_PAIR:
+                stats_path = os.path.join(folder, f"{self.tag}_paired_t_tests.csv".strip("_"))
+                plots.save_paired_stats(self.specs, stats_path)
+                written.append(stats_path)
         except Exception as exc:
             QMessageBox.critical(self, "Save plots", f"Could not save the plots:\n{exc}")
             return
         self.saved_to = folder
         self.open_btn.setEnabled(True)
         self.info.setText(f"Saved {len(written)} files to {folder}")
+
+
+def _p_text(p) -> str:
+    if p != p:  # not a number: the test could not be done
+        return "p not available"
+    return ("p < 0.0001" if p < 0.0001 else f"p = {p:.3g}") + f" ({plots.stars(p)})"
+
